@@ -1,0 +1,11 @@
+export type Role = "STAFF" | "MANAGER" | "OWNER";
+export type RoomType = "DELUXE" | "PREMIUM" | "SUITE";
+export type CleaningStatus = "CLEAN" | "CLEANING_IN_PROGRESS" | "DIRTY";
+export type MaintenanceStatus = "OK" | "NEEDS_MAINTENANCE" | "UNDER_MAINTENANCE";
+export type RoomStatus = "AVAILABLE" | "RESERVED" | "OCCUPIED" | "MAINTENANCE";
+export type BookingStatus = "RESERVED" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED";
+export type PaymentStatus = "PAID" | "PARTIAL" | "PENDING";
+export type PaymentMethod = "CASH" | "CARD" | "UPI" | "BANK_TRANSFER" | "OTHER";
+export type ServiceRequestType = "HOUSEKEEPING" | "EXTRA_TOWELS" | "WATER_BOTTLE" | "TEA_COFFEE" | "TAXI_BOOKING" | "TEMPLE_INFO" | "CALL_RECEPTION" | "CUSTOM";
+export type ServiceRequestStatus = "PENDING" | "ASSIGNED" | "IN_PROGRESS" | "COMPLETED";
+export type NotificationType = "CHECK_IN" | "CHECK_OUT" | "RESERVATION" | "SERVICE_REQUEST" | "MAINTENANCE" | "PENDING_PAYMENT" | "WHATSAPP" | "HOUSEKEEPING";

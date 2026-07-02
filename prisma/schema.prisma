@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./hotel.db"
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Models
+// ──────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  username     String?
+  phone        String?
+  passwordHash String
+  role         String   @default("STAFF")
+  createdAt    DateTime @default(now())
+
+  bookingsCreated  Booking[]        @relation("BookingCreatedBy")
+  assignedRequests ServiceRequest[] @relation("RequestAssignedTo")
+  payments         Payment[]        @relation("PaymentRecordedBy")
+  expenses         Expense[]        @relation("ExpenseCreatedBy")
+
+  @@map("users")
+}
+
+model Room {
+  id                String   @id @default(cuid())
+  number            String   @unique
+  type              String
+  floor             Int      @default(1)
+  basePrice         Decimal
+  cleaningStatus    String   @default("CLEAN")
+  maintenanceStatus String   @default("OK")
+  status            String   @default("AVAILABLE")
+  qrToken           String   @unique @default(cuid())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bookings        Booking[]
+  serviceRequests ServiceRequest[]
+
+  @@map("rooms")
+}
+
+model Guest {
+  id              String   @id @default(cuid())
+  title           String?
+  name            String
+  mobile          String   @unique
+  address         String?
+  idProofType     String?
+  idProofNumber   String?
+  idProofUrl      String?
+  specialRequests String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([mobile])
+  @@map("guests")
+}
+
+model Booking {
+  id                    String    @id @default(cuid())
+  guestId               String
+  roomId                String
+  numberOfGuests        Int       @default(1)
+  checkInDate           DateTime  @default(now())
+  expectedCheckOut      DateTime
+  actualCheckOut        DateTime?
+  status                String    @default("CHECKED_IN")
+  roomRate              Decimal
+  totalAmount           Decimal
+  amountPaid            Decimal   @default(0)
+  paymentStatus         String    @default("PENDING")
+  paymentReminderSentAt DateTime?
+  notes                 String?
+  createdById           String
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  guest     Guest     @relation(fields: [guestId], references: [id])
+  room      Room      @relation(fields: [roomId], references: [id])
+  createdBy User      @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  payments  Payment[]
+
+  @@index([guestId])
+  @@index([roomId])
+  @@index([status])
+  @@map("bookings")
+}
+
+model Payment {
+  id           String   @id @default(cuid())
+  bookingId    String
+  amount       Decimal
+  method       String   @default("CASH")
+  status       String   @default("PAID")
+  paidAt       DateTime @default(now())
+  recordedById String
+  createdAt    DateTime @default(now())
+
+  booking    Booking @relation(fields: [bookingId], references: [id])
+  recordedBy User    @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([bookingId])
+  @@index([paidAt])
+  @@map("payments")
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  category    String
+  description String?
+  amount      Decimal
+  date        DateTime @default(now())
+  createdById String
+  createdAt   DateTime @default(now())
+
+  createdBy User @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+
+  @@index([date])
+  @@map("expenses")
+}
+
+model ServiceRequest {
+  id            String    @id @default(cuid())
+  roomId        String
+  type          String
+  description   String?
+  photoUrl      String?
+  status        String    @default("PENDING")
+  assignedToId  String?
+  notes         String?
+  rating        Int?
+  ratingComment String?
+  createdAt     DateTime  @default(now())
+  assignedAt    DateTime?
+  completedAt   DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  room       Room  @relation(fields: [roomId], references: [id])
+  assignedTo User? @relation("RequestAssignedTo", fields: [assignedToId], references: [id])
+
+  @@index([status])
+  @@index([roomId])
+  @@map("service_requests")
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("device_tokens")
+}
+
+model Notification {
+  id         String   @id @default(cuid())
+  type       String
+  title      String
+  message    String
+  link       String?
+  read       Boolean  @default(false)
+  targetRole String?
+  createdAt  DateTime @default(now())
+
+  @@index([read])
+  @@index([createdAt])
+  @@map("notifications")
+}

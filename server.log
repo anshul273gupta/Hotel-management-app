@@ -1,0 +1,29 @@
+====================================
+   Hotel Agrawal Inn - Starting     
+====================================
+
+  Manager:  Hotel Agrawal Inn / manager123
+  Owner:    Hotel Agrawal Inn / AI9406851411
+
+  ℹ️  Ngrok not configured — QR codes use LAN IP (hotel WiFi only).
+     To enable public access on any network:
+     1. Sign up free at https://ngrok.com
+     2. Copy your authtoken and static domain into .env:
+        NGROK_AUTHTOKEN="your-token"
+        NGROK_STATIC_DOMAIN="your-name.ngrok-free.app"
+
+
+  Starting Hotel Agrawal Inn on http://localhost:3000...
+
+(node:30236) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+> hotel-management@0.1.0 start
+> next start --port 3000
+
+[1m[38;2;173;127;168m▲ Next.js 16.2.9[39m[22m
+- Local:         http://localhost:3000
+- Network:       http://192.168.205.1:3000
+[32m[1m✓[22m[39m Ready in 388ms
+
+  Server stopped.

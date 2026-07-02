@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "403124386354",
+    "project_id": "hotel-agrawal-inn",
+    "storage_bucket": "hotel-agrawal-inn.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:403124386354:android:2a4905f6d06b83f4235a2b",
+        "android_client_info": {
+          "package_name": "com.AgrawalInn.hotelmanagement"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC6uHVNQ1A_Py_kbwG4iQuaqFhkPvFmphA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
