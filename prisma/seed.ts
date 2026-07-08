@@ -24,7 +24,7 @@ async function main() {
       name: "Manager",
       email: "manager@hotel.com",
       phone: "7342551411",
-      username: "Hotel Agrawal Inn",
+      username: "AI",
       passwordHash: managerHash,
       role: "MANAGER",
     },
@@ -35,7 +35,7 @@ async function main() {
       name: "Anand Gupta",
       email: "owner@hotel.com",
       phone: "7342551411",
-      username: "Hotel Agrawal Inn",
+      username: "AI",
       passwordHash: ownerHash,
       role: "OWNER",
     },
@@ -60,8 +60,8 @@ async function main() {
   });
 
   console.log("Seed complete — fresh start.");
-  console.log("  Manager: Hotel Agrawal Inn / manager123");
-  console.log("  Owner:   Hotel Agrawal Inn / AI9406851411");
+  console.log("  Manager: AI / manager123");
+  console.log("  Owner:   AI / AI9406851411");
 }
 
 main()

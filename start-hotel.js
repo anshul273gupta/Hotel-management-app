@@ -232,8 +232,8 @@ function startNgrok(authToken, staticDomain) {
 console.log("====================================");
 console.log("   Hotel Agrawal Inn - Starting     ");
 console.log("====================================\n");
-console.log("  Manager:  Hotel Agrawal Inn / manager123");
-console.log("  Owner:    Hotel Agrawal Inn / AI9406851411\n");
+console.log("  Manager:  AI/ manager123");
+console.log("  Owner:    AI / AI9406851411\n");
 
 clearTunnelUrl();
 
