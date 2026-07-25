@@ -3,8 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./hotel.db"
+  provider  = "postgresql"
+  // Pooled connection used by the app at runtime (Neon/Supabase pgBouncer).
+  url       = env("DATABASE_URL")
+  // Direct connection used by `prisma migrate` — pooled connections can't run DDL.
+  directUrl = env("DIRECT_URL")
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -34,7 +37,7 @@ model Room {
   number            String   @unique
   type              String
   floor             Int      @default(1)
-  basePrice         Decimal
+  basePrice         Decimal  @db.Decimal(10, 2)
   cleaningStatus    String   @default("CLEAN")
   maintenanceStatus String   @default("OK")
   status            String   @default("AVAILABLE")
@@ -76,9 +79,9 @@ model Booking {
   expectedCheckOut      DateTime
   actualCheckOut        DateTime?
   status                String    @default("CHECKED_IN")
-  roomRate              Decimal
-  totalAmount           Decimal
-  amountPaid            Decimal   @default(0)
+  roomRate              Decimal   @db.Decimal(10, 2)
+  totalAmount           Decimal   @db.Decimal(10, 2)
+  amountPaid            Decimal   @default(0) @db.Decimal(10, 2)
   paymentStatus         String    @default("PENDING")
   paymentReminderSentAt DateTime?
   notes                 String?
@@ -100,7 +103,7 @@ model Booking {
 model Payment {
   id           String   @id @default(cuid())
   bookingId    String
-  amount       Decimal
+  amount       Decimal  @db.Decimal(10, 2)
   method       String   @default("CASH")
   status       String   @default("PAID")
   paidAt       DateTime @default(now())
@@ -119,7 +122,7 @@ model Expense {
   id          String   @id @default(cuid())
   category    String
   description String?
-  amount      Decimal
+  amount      Decimal  @db.Decimal(10, 2)
   date        DateTime @default(now())
   createdById String
   createdAt   DateTime @default(now())

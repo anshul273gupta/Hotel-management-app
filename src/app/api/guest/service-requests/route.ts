@@ -38,7 +38,15 @@ export async function POST(request: Request) {
 
   let photoUrl: string | undefined;
   if (photo instanceof File && photo.size > 0) {
-    photoUrl = await saveUploadedFile(photo, "service-requests");
+    try {
+      photoUrl = await saveUploadedFile(photo, "service-requests");
+    } catch (err) {
+      const e = err as { message?: string; status?: number };
+      return NextResponse.json(
+        { error: e?.message ?? "Could not upload the photo" },
+        { status: e?.status ?? 400 },
+      );
+    }
   }
 
   const serviceRequest = await prisma.serviceRequest.create({
@@ -69,13 +77,30 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing room token" }, { status: 400 });
   }
 
-  const room = await prisma.room.findUnique({ where: { qrToken: roomToken } });
+  const room = await prisma.room.findUnique({
+    where: { qrToken: roomToken },
+    include: {
+      bookings: {
+        where: { status: "CHECKED_IN" },
+        orderBy: { checkInDate: "desc" },
+        take: 1,
+        select: { checkInDate: true },
+      },
+    },
+  });
   if (!room) {
     return NextResponse.json({ error: "Room not found" }, { status: 404 });
   }
 
+  // Only expose requests raised during the current stay — otherwise the next
+  // occupant of the room can read the previous guest's request history.
+  const currentStayStart = room.bookings[0]?.checkInDate;
+  if (!currentStayStart) {
+    return NextResponse.json({ requests: [] });
+  }
+
   const requests = await prisma.serviceRequest.findMany({
-    where: { roomId: room.id },
+    where: { roomId: room.id, createdAt: { gte: currentStayStart } },
     orderBy: { createdAt: "desc" },
     take: 10,
     select: {

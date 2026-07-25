@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSession, destroySession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 
@@ -108,7 +108,23 @@ export async function POST(request: Request) {
     const result = await prisma.$transaction(async (tx) => {
       const room = await tx.room.findUnique({ where: { id: data.roomId } });
       if (!room) throw Object.assign(new Error("Room not found"), { status: 404 });
-      if (room.status !== "AVAILABLE") throw Object.assign(new Error("Room is no longer available"), { status: 409 });
+      if (room.maintenanceStatus === "UNDER_MAINTENANCE") {
+        throw Object.assign(new Error("Room is under maintenance"), { status: 409 });
+      }
+
+      // Check the actual stay dates rather than the room's current status flag:
+      // a reservation starting next month must not block tonight's walk-in.
+      const overlapping = await tx.booking.findFirst({
+        where: {
+          roomId: room.id,
+          status: { in: ["CHECKED_IN", "RESERVED"] },
+          checkInDate: { lt: expectedCheckOut },
+          expectedCheckOut: { gt: checkInDate },
+        },
+      });
+      if (overlapping) {
+        throw Object.assign(new Error("Room is already booked for these dates"), { status: 409 });
+      }
 
       const newBooking = await tx.booking.create({
         data: {
@@ -140,15 +156,7 @@ export async function POST(request: Request) {
         include: { guest: true, room: true },
       });
 
-      await tx.room.update({
-        where: { id: room.id },
-        data: {
-          status: deriveRoomStatus({
-            maintenanceStatus: room.maintenanceStatus,
-            hasActiveBooking: true,
-          }),
-        },
-      });
+      await syncRoomStatus(room.id, tx);
 
       return newBooking;
     });

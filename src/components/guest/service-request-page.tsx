@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { toast } from "sonner";
-import { Minus, Plus, Star, Loader2, Send, X } from "lucide-react";
+import { Star, Loader2, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -184,7 +184,7 @@ export function ServiceRequestPage({
       const res = await fetch(`/api/guest/service-requests/${requestId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rating }),
+        body: JSON.stringify({ rating, roomToken }),
       });
       if (!res.ok) { toast.error("Could not submit rating"); return; }
       toast.success("Thanks for your feedback!");

@@ -281,7 +281,6 @@ export function CheckInForm({ rooms }: { rooms: AvailableRoom[] }) {
     const totalAmount = result.reduce((sum, r) => sum + r.booking.totalAmount, 0);
     const amountPaid = result.reduce((sum, r) => sum + r.booking.amountPaid, 0);
     const roomNumbers = result.map((r) => r.room.number).join(", ");
-    const floors = Array.from(new Set(result.map((r) => r.room.floor))).join(", ");
     const first = result[0];
     const greetingMsg = whatsappTemplates.checkInGreeting({
       title: first.guest.title ?? watch("title") ?? "Mr.",

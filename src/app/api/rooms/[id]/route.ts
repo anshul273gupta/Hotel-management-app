@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 
 const schema = z.object({
@@ -44,20 +44,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     );
   }
 
-  const hasReserved = room.bookings.some((b) => b.status === "RESERVED");
   const cleaningStatus = parsed.data.cleaningStatus ?? room.cleaningStatus;
   const maintenanceStatus = parsed.data.maintenanceStatus ?? room.maintenanceStatus;
-  const status = deriveRoomStatus({
-    cleaningStatus,
-    maintenanceStatus,
-    hasActiveBooking: false,
-    hasReservedBooking: hasReserved,
-  });
 
-  const updated = await prisma.room.update({
+  await prisma.room.update({
     where: { id },
-    data: { cleaningStatus, maintenanceStatus, status },
+    data: { cleaningStatus, maintenanceStatus },
   });
+  // Derive the status from live bookings so clearing maintenance restores the
+  // correct AVAILABLE / RESERVED / OCCUPIED value.
+  const updated = (await syncRoomStatus(id)) ?? (await prisma.room.findUnique({ where: { id } }));
 
   if (maintenanceStatus === "NEEDS_MAINTENANCE" && room.maintenanceStatus !== "NEEDS_MAINTENANCE") {
     await createNotification({

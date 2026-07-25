@@ -40,7 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# SQLite WAL/SHM lock files (created while DB is open; never commit these)
+# Local database files — never commit these. They contain real guest data and
+# password hashes. The app now uses Postgres via DATABASE_URL.
+prisma/*.db
 prisma/*.db-shm
 prisma/*.db-wal
 

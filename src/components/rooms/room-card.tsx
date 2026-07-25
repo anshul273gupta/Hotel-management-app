@@ -49,9 +49,6 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
   const [checkOutDone, setCheckOutDone] = useState<{ guestName: string; mobile: string; time: string } | null>(null);
   const colors = ROOM_STATUS_COLORS[room.status];
   const paymentDue = room.currentBooking && room.currentBooking.paymentStatus !== "PAID";
-  const pendingAmount = room.currentBooking
-    ? room.currentBooking.totalAmount - room.currentBooking.amountPaid
-    : 0;
 
   async function handleToggleMaintenance() {
     const goingToMaintenance = room.status !== "MAINTENANCE";

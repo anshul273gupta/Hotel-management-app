@@ -28,6 +28,28 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const outstanding = Number(booking.totalAmount) - Number(booking.amountPaid);
 
+  // Nothing left to collect (e.g. an over-payment was already recorded): mark
+  // it paid but don't write a zero/negative payment row, which would corrupt
+  // the revenue and profit totals.
+  if (outstanding <= 0) {
+    const settled = await prisma.booking.update({
+      where: { id },
+      data: { paymentStatus: "PAID" },
+    });
+    broadcastUpdate("rooms-updated");
+    broadcastUpdate("bookings-updated");
+    broadcastUpdate("dashboard-updated");
+    broadcastUpdate("guests-updated");
+    return NextResponse.json({
+      booking: {
+        id: settled.id,
+        amountPaid: Number(settled.amountPaid),
+        totalAmount: Number(settled.totalAmount),
+        paymentStatus: settled.paymentStatus,
+      },
+    });
+  }
+
   const [updated] = await prisma.$transaction([
     prisma.booking.update({
       where: { id },

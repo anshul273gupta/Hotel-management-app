@@ -6,8 +6,11 @@ import { SERVICE_REQUEST_TYPE_LABELS } from "@/lib/constants";
 import type { ServiceRequestType } from "@/lib/types";
 
 const schema = z.object({
+  // Proves the rater is the guest in that room. Without it any visitor could
+  // rate (and spam notifications for) arbitrary request IDs.
+  roomToken: z.string().min(1, "Missing room token"),
   rating: z.coerce.number().int().min(1).max(5),
-  ratingComment: z.string().optional(),
+  ratingComment: z.string().max(500).optional(),
 });
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -20,6 +23,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const existing = await prisma.serviceRequest.findUnique({ where: { id }, include: { room: true } });
   if (!existing) {
+    return NextResponse.json({ error: "Request not found" }, { status: 404 });
+  }
+  if (existing.room.qrToken !== parsed.data.roomToken) {
     return NextResponse.json({ error: "Request not found" }, { status: 404 });
   }
   if (existing.status !== "COMPLETED") {

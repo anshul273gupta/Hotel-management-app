@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 
 export async function POST(_: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -32,16 +32,7 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
     data: { status: "CHECKED_IN", checkInDate: new Date() },
   });
 
-  await prisma.room.update({
-    where: { id: booking.roomId },
-    data: {
-      status: deriveRoomStatus({
-        cleaningStatus: booking.room.cleaningStatus,
-        maintenanceStatus: booking.room.maintenanceStatus,
-        hasActiveBooking: true,
-      }),
-    },
-  });
+  await syncRoomStatus(booking.roomId);
 
   await createNotification({
     type: "CHECK_IN",

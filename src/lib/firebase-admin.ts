@@ -6,15 +6,23 @@ import { prisma } from "@/lib/prisma";
 type Messaging = import("firebase-admin/messaging").Messaging;
 
 let messaging: Messaging | null = null;
+let messagingInitFailed = false;
 
-function getMessaging(): Messaging | null {
+async function getMessaging(): Promise<Messaging | null> {
   if (messaging) return messaging;
-  try {
-    const { initializeApp, getApps, cert } = require("firebase-admin/app") as typeof import("firebase-admin/app");
-    const { getMessaging: _getMessaging } = require("firebase-admin/messaging") as typeof import("firebase-admin/messaging");
+  // Don't retry (and re-read the key file) on every notification once we know
+  // Firebase isn't configured on this deployment.
+  if (messagingInitFailed) return null;
 
+  try {
     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
-    if (!serviceAccountPath) return null;
+    if (!serviceAccountPath) {
+      messagingInitFailed = true;
+      return null;
+    }
+
+    const { initializeApp, getApps, cert } = await import("firebase-admin/app");
+    const { getMessaging: _getMessaging } = await import("firebase-admin/messaging");
 
     const serviceAccount = JSON.parse(
       readFileSync(path.resolve(process.cwd(), serviceAccountPath), "utf-8"),
@@ -27,6 +35,7 @@ function getMessaging(): Messaging | null {
     messaging = _getMessaging(app);
     return messaging;
   } catch {
+    messagingInitFailed = true;
     return null;
   }
 }
@@ -44,7 +53,7 @@ export async function pushNotificationToCloud(payload: {
   body: string;
   link?: string;
 }) {
-  const m = getMessaging();
+  const m = await getMessaging();
   if (!m) return;
 
   const rows = await prisma.deviceToken.findMany({ select: { token: true } });

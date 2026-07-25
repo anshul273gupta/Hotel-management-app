@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession();
@@ -35,15 +35,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   await prisma.room.update({
     where: { id: booking.roomId },
-    data: {
-      cleaningStatus: "CLEAN",
-      status: deriveRoomStatus({
-        cleaningStatus: "CLEAN",
-        maintenanceStatus: booking.room.maintenanceStatus,
-        hasActiveBooking: false,
-      }),
-    },
+    data: { cleaningStatus: "CLEAN" },
   });
+  // Recompute from live bookings so a room that still holds an upcoming
+  // reservation goes back to RESERVED instead of falsely showing AVAILABLE.
+  await syncRoomStatus(booking.roomId);
 
   await createNotification({
     type: "CHECK_OUT",

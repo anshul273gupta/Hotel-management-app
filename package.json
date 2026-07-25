@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && prisma migrate deploy && next build",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:import-sqlite": "node scripts/migrate-sqlite-to-postgres.js",
     "start": "next start",
     "lint": "eslint",
     "db:seed": "tsx prisma/seed.ts"

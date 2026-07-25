@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getSession, destroySession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 
@@ -146,20 +146,7 @@ export async function POST(request: Request) {
         include: { guest: true, room: true },
       });
 
-      const hasCheckedIn = await tx.booking.findFirst({
-        where: { roomId: room.id, status: "CHECKED_IN" },
-        select: { id: true },
-      });
-      await tx.room.update({
-        where: { id: room.id },
-        data: {
-          status: deriveRoomStatus({
-            maintenanceStatus: room.maintenanceStatus,
-            hasActiveBooking: !!hasCheckedIn,
-            hasReservedBooking: true,
-          }),
-        },
-      });
+      await syncRoomStatus(room.id, tx);
 
       return newBooking;
     });

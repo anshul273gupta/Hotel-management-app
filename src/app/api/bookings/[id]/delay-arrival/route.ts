@@ -21,11 +21,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   const [hours, minutes] = (body.newTime as string).split(":").map(Number);
-  const newCheckInDate = new Date();
+
+  // Keep the booking on its own arrival day — only the time of day moves.
+  // Building the date from `new Date()` used to drag a reservation made for a
+  // future date back to today, silently destroying the booking.
+  const now = new Date();
+  const base = booking.checkInDate > now ? new Date(booking.checkInDate) : now;
+  const newCheckInDate = new Date(base);
   newCheckInDate.setHours(hours, minutes, 0, 0);
 
-  // If the time has already passed today, push to tomorrow
-  if (newCheckInDate <= new Date()) {
+  // Only roll over to the next day when the guest is delaying an arrival that
+  // was due today and the chosen time has already passed.
+  if (newCheckInDate <= now) {
     newCheckInDate.setDate(newCheckInDate.getDate() + 1);
   }
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { deriveRoomStatus } from "@/lib/rooms";
+import { syncRoomStatus } from "@/lib/rooms";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { toDecimalNumber } from "@/lib/format";
 
@@ -40,14 +40,9 @@ export async function processAutomaticBookingTransitions() {
 
     await prisma.room.update({
       where: { id: booking.roomId },
-      data: {
-        cleaningStatus: "CLEAN",
-        status: deriveRoomStatus({
-          maintenanceStatus: booking.room.maintenanceStatus,
-          hasActiveBooking: false,
-        }),
-      },
+      data: { cleaningStatus: "CLEAN" },
     });
+    await syncRoomStatus(booking.roomId);
 
     await createNotification({
       type: "CHECK_OUT",
@@ -87,7 +82,19 @@ export async function processAutomaticBookingTransitions() {
     paymentReminders++;
   }
 
-  if (checkedOut > 0 || paymentReminders > 0) {
+  // Reservations become "imminent" purely with the passage of time, so refresh
+  // the affected rooms on each sweep — otherwise a room booked for tomorrow
+  // would keep showing AVAILABLE until someone edited it by hand.
+  const roomsWithReservations = await prisma.booking.findMany({
+    where: { status: "RESERVED", expectedCheckOut: { gt: now } },
+    select: { roomId: true },
+    distinct: ["roomId"],
+  });
+  for (const { roomId } of roomsWithReservations) {
+    await syncRoomStatus(roomId);
+  }
+
+  if (checkedOut > 0 || paymentReminders > 0 || roomsWithReservations.length > 0) {
     broadcastUpdate("rooms-updated");
     broadcastUpdate("bookings-updated");
     broadcastUpdate("dashboard-updated");

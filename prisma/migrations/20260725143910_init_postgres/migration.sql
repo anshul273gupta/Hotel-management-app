@@ -1,44 +1,12 @@
--- CreateEnum
-CREATE TYPE "Role" AS ENUM ('STAFF', 'MANAGER', 'OWNER');
-
--- CreateEnum
-CREATE TYPE "RoomType" AS ENUM ('DELUXE', 'PREMIUM', 'SUITE');
-
--- CreateEnum
-CREATE TYPE "CleaningStatus" AS ENUM ('CLEAN', 'CLEANING_IN_PROGRESS', 'DIRTY');
-
--- CreateEnum
-CREATE TYPE "MaintenanceStatus" AS ENUM ('OK', 'NEEDS_MAINTENANCE', 'UNDER_MAINTENANCE');
-
--- CreateEnum
-CREATE TYPE "RoomStatus" AS ENUM ('AVAILABLE', 'OCCUPIED', 'CLEANING', 'MAINTENANCE');
-
--- CreateEnum
-CREATE TYPE "BookingStatus" AS ENUM ('RESERVED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED');
-
--- CreateEnum
-CREATE TYPE "PaymentStatus" AS ENUM ('PAID', 'PARTIAL', 'PENDING');
-
--- CreateEnum
-CREATE TYPE "PaymentMethod" AS ENUM ('CASH', 'CARD', 'UPI', 'BANK_TRANSFER', 'OTHER');
-
--- CreateEnum
-CREATE TYPE "ServiceRequestType" AS ENUM ('HOUSEKEEPING', 'EXTRA_TOWELS', 'WATER_BOTTLE', 'TEA_COFFEE', 'TAXI_BOOKING', 'TEMPLE_INFO', 'CALL_RECEPTION', 'CUSTOM');
-
--- CreateEnum
-CREATE TYPE "ServiceRequestStatus" AS ENUM ('PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED');
-
--- CreateEnum
-CREATE TYPE "NotificationType" AS ENUM ('CHECK_IN', 'CHECK_OUT', 'SERVICE_REQUEST', 'MAINTENANCE', 'LOW_STOCK', 'PENDING_PAYMENT', 'WHATSAPP', 'HOUSEKEEPING');
-
 -- CreateTable
 CREATE TABLE "users" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
+    "username" TEXT,
     "phone" TEXT,
     "passwordHash" TEXT NOT NULL,
-    "role" "Role" NOT NULL DEFAULT 'STAFF',
+    "role" TEXT NOT NULL DEFAULT 'STAFF',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
@@ -48,12 +16,12 @@ CREATE TABLE "users" (
 CREATE TABLE "rooms" (
     "id" TEXT NOT NULL,
     "number" TEXT NOT NULL,
-    "type" "RoomType" NOT NULL,
+    "type" TEXT NOT NULL,
     "floor" INTEGER NOT NULL DEFAULT 1,
     "basePrice" DECIMAL(10,2) NOT NULL,
-    "cleaningStatus" "CleaningStatus" NOT NULL DEFAULT 'CLEAN',
-    "maintenanceStatus" "MaintenanceStatus" NOT NULL DEFAULT 'OK',
-    "status" "RoomStatus" NOT NULL DEFAULT 'AVAILABLE',
+    "cleaningStatus" TEXT NOT NULL DEFAULT 'CLEAN',
+    "maintenanceStatus" TEXT NOT NULL DEFAULT 'OK',
+    "status" TEXT NOT NULL DEFAULT 'AVAILABLE',
     "qrToken" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -64,10 +32,12 @@ CREATE TABLE "rooms" (
 -- CreateTable
 CREATE TABLE "guests" (
     "id" TEXT NOT NULL,
+    "title" TEXT,
     "name" TEXT NOT NULL,
     "mobile" TEXT NOT NULL,
     "address" TEXT,
     "idProofType" TEXT,
+    "idProofNumber" TEXT,
     "idProofUrl" TEXT,
     "specialRequests" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -85,11 +55,12 @@ CREATE TABLE "bookings" (
     "checkInDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "expectedCheckOut" TIMESTAMP(3) NOT NULL,
     "actualCheckOut" TIMESTAMP(3),
-    "status" "BookingStatus" NOT NULL DEFAULT 'CHECKED_IN',
+    "status" TEXT NOT NULL DEFAULT 'CHECKED_IN',
     "roomRate" DECIMAL(10,2) NOT NULL,
     "totalAmount" DECIMAL(10,2) NOT NULL,
     "amountPaid" DECIMAL(10,2) NOT NULL DEFAULT 0,
-    "paymentStatus" "PaymentStatus" NOT NULL DEFAULT 'PENDING',
+    "paymentStatus" TEXT NOT NULL DEFAULT 'PENDING',
+    "paymentReminderSentAt" TIMESTAMP(3),
     "notes" TEXT,
     "createdById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -103,8 +74,8 @@ CREATE TABLE "payments" (
     "id" TEXT NOT NULL,
     "bookingId" TEXT NOT NULL,
     "amount" DECIMAL(10,2) NOT NULL,
-    "method" "PaymentMethod" NOT NULL DEFAULT 'CASH',
-    "status" "PaymentStatus" NOT NULL DEFAULT 'PAID',
+    "method" TEXT NOT NULL DEFAULT 'CASH',
+    "status" TEXT NOT NULL DEFAULT 'PAID',
     "paidAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "recordedById" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -126,27 +97,13 @@ CREATE TABLE "expenses" (
 );
 
 -- CreateTable
-CREATE TABLE "inventory_items" (
-    "id" TEXT NOT NULL,
-    "name" TEXT NOT NULL,
-    "category" TEXT NOT NULL,
-    "unit" TEXT NOT NULL,
-    "currentStock" INTEGER NOT NULL DEFAULT 0,
-    "minThreshold" INTEGER NOT NULL DEFAULT 0,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "inventory_items_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "service_requests" (
     "id" TEXT NOT NULL,
     "roomId" TEXT NOT NULL,
-    "type" "ServiceRequestType" NOT NULL,
+    "type" TEXT NOT NULL,
     "description" TEXT,
     "photoUrl" TEXT,
-    "status" "ServiceRequestStatus" NOT NULL DEFAULT 'PENDING',
+    "status" TEXT NOT NULL DEFAULT 'PENDING',
     "assignedToId" TEXT,
     "notes" TEXT,
     "rating" INTEGER,
@@ -160,14 +117,24 @@ CREATE TABLE "service_requests" (
 );
 
 -- CreateTable
+CREATE TABLE "device_tokens" (
+    "id" TEXT NOT NULL,
+    "token" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "device_tokens_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "notifications" (
     "id" TEXT NOT NULL,
-    "type" "NotificationType" NOT NULL,
+    "type" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "message" TEXT NOT NULL,
     "link" TEXT,
     "read" BOOLEAN NOT NULL DEFAULT false,
-    "targetRole" "Role",
+    "targetRole" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "notifications_pkey" PRIMARY KEY ("id")
@@ -211,6 +178,9 @@ CREATE INDEX "service_requests_status_idx" ON "service_requests"("status");
 
 -- CreateIndex
 CREATE INDEX "service_requests_roomId_idx" ON "service_requests"("roomId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "device_tokens_token_key" ON "device_tokens"("token");
 
 -- CreateIndex
 CREATE INDEX "notifications_read_idx" ON "notifications"("read");

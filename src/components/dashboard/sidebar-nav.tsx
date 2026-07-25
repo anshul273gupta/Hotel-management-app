@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { getNavForRole, type NavItem } from "@/lib/nav";
-import { useRealtime } from "@/hooks/use-realtime";
+import { usePendingRequestCount } from "@/hooks/use-pending-request-count";
 import type { Role } from "@/lib/types";
 
 function isActive(pathname: string, href: string) {
@@ -17,23 +16,7 @@ function isActive(pathname: string, href: string) {
 export function SidebarNav({ role }: { role: Role }) {
   const pathname = usePathname();
   const items = getNavForRole(role);
-  const [pendingRequests, setPendingRequests] = useState(0);
-
-  const fetchPending = useCallback(async () => {
-    try {
-      const res = await fetch("/api/service-requests/pending-count");
-      if (res.ok) {
-        const data = await res.json();
-        setPendingRequests(data.count ?? 0);
-      }
-    } catch {}
-  }, []);
-
-  useEffect(() => { fetchPending(); }, [fetchPending]);
-
-  useRealtime((kind) => {
-    if (kind === "requests-updated") fetchPending();
-  });
+  const pendingRequests = usePendingRequestCount();
 
   return (
     <aside className="hidden w-60 shrink-0 border-r bg-sidebar md:sticky md:top-0 md:flex md:h-screen md:flex-col print:hidden">

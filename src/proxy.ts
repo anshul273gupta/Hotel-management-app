@@ -32,7 +32,12 @@ export const config = {
     /*
      * Protect everything except: login page, guest-facing QR pages and APIs,
      * auth API, uploaded files, and Next.js internals.
+     *
+     * The alternatives are anchored with a trailing `/` or end-of-string so a
+     * prefix match can't be abused: without it, `/guests` and
+     * `/api/guests/lookup` matched the `guest` exclusion and skipped auth
+     * entirely, exposing the whole guest register.
      */
-    "/((?!login|guest|api/auth|api/guest|_next/static|_next/image|uploads|favicon.ico|logo.jpeg).*)",
+    "/((?!login$|guest/|api/auth/|api/guest/|_next/static/|_next/image|uploads/|favicon.ico$|logo.jpeg$).*)",
   ],
 };
