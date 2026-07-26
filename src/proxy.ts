@@ -4,10 +4,32 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 
 const PUBLIC_PATHS = ["/login"];
 
+/**
+ * Files that must be reachable without a session.
+ *
+ * The service worker in particular: browsers fetch /firebase-messaging-sw.js
+ * with no cookies, so redirecting it to /login silently breaks push
+ * notification registration. Checked here in code rather than in the matcher
+ * regex, which proved unreliable for dotted filenames.
+ */
+const PUBLIC_FILES = new Set([
+  "/firebase-messaging-sw.js",
+  "/manifest.json",
+  "/favicon.ico",
+  "/favicon.png",
+  "/logo.jpeg",
+]);
+
+function isPublicFile(pathname: string) {
+  if (PUBLIC_FILES.has(pathname)) return true;
+  // Icons and vector assets referenced by the manifest / login page.
+  return /^\/(?:icon-\d+\.png|[\w-]+\.svg)$/.test(pathname);
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (PUBLIC_PATHS.some((path) => pathname === path)) {
+  if (PUBLIC_PATHS.some((path) => pathname === path) || isPublicFile(pathname)) {
     return NextResponse.next();
   }
 
@@ -50,6 +72,6 @@ export const config = {
      * `/api/guests/lookup` matched the `guest` exclusion and skipped auth
      * entirely, exposing the whole guest register.
      */
-    "/((?!login$|guest/|api/auth/|api/guest/|_next/static/|_next/image|uploads/|favicon.ico$|logo.jpeg$).*)",
+    "/((?!login$|guest/|api/auth/|api/guest/|_next/static/|_next/image|uploads/).*)",
   ],
 };

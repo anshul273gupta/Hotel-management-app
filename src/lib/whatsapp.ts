@@ -2,8 +2,16 @@
  * Click-to-chat WhatsApp link builder (wa.me deep links).
  */
 
-const HOTEL_NAME = process.env.HOTEL_NAME ?? "Hotel Agrawal Inn";
-const HOTEL_PHONE = process.env.HOTEL_PHONE ?? "";
+// These are read from client components too (the WhatsApp buttons on the room
+// card, check-in form and arrival alert). Only NEXT_PUBLIC_* variables are
+// available in the browser — without the prefix the value silently became an
+// empty string there, producing dead "tel:+91" links and unbranded messages.
+// The plain names are kept as a fallback so existing server-side config and
+// older .env files keep working.
+const HOTEL_NAME =
+  process.env.NEXT_PUBLIC_HOTEL_NAME ?? process.env.HOTEL_NAME ?? "Hotel Agrawal Inn";
+const HOTEL_PHONE =
+  process.env.NEXT_PUBLIC_HOTEL_PHONE ?? process.env.HOTEL_PHONE ?? "";
 
 function normalizeMobile(mobile: string): string {
   const digits = mobile.replace(/[^\d]/g, "");
