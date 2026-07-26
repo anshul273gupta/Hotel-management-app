@@ -71,8 +71,44 @@ export function NotificationBell() {
 
   useRealtime((kind, data) => {
     if (kind === "notification") {
-      const notification = (data as { data: Notification }).data;
-      setNotifications((prev) => [notification, ...prev].slice(0, 30));
+      const notification = (data as { data?: Notification } | null)?.data;
+
+      // A poll tick arrives with no payload — refetch instead, and only
+      // announce entries we haven't already shown so the bell doesn't chime
+      // repeatedly for the same notification.
+      if (!notification) {
+        fetch("/api/notifications")
+          .then((res) => (res.ok ? res.json() : null))
+          .then((fresh) => {
+            if (!fresh) return;
+            setNotifications((prev) => {
+              const known = new Set(prev.map((n) => n.id));
+              const added = (fresh.notifications as Notification[]).filter(
+                (n) => !known.has(n.id),
+              );
+              if (added.length && prev.length) {
+                playNotificationSound();
+                const [first] = added;
+                toast(first.title, {
+                  description:
+                    added.length > 1
+                      ? `${first.message} (+${added.length - 1} more)`
+                      : first.message,
+                });
+              }
+              return fresh.notifications;
+            });
+            setUnreadCount(fresh.unreadCount);
+          })
+          .catch(() => {});
+        return;
+      }
+
+      setNotifications((prev) =>
+        prev.some((n) => n.id === notification.id)
+          ? prev
+          : [notification, ...prev].slice(0, 30),
+      );
       setUnreadCount((prev) => prev + 1);
       playNotificationSound();
       toast(notification.title, { description: notification.message });

@@ -17,13 +17,56 @@ const { PrismaClient } = require("@prisma/client");
 
 const SQLITE_PATH = path.join(__dirname, "..", "prisma", "hotel.db");
 
-function readSqliteTable(table) {
-  // Uses the sqlite3 CLI in JSON mode so we don't need a native driver.
-  const out = execFileSync("sqlite3", [SQLITE_PATH, "-json", `SELECT * FROM "${table}";`], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  }).trim();
-  return out ? JSON.parse(out) : [];
+/**
+ * Opens the SQLite file using whichever reader is available:
+ *   1. node:sqlite  — built into Node 22.5+ / 24, nothing to install (Windows friendly)
+ *   2. the sqlite3 command-line tool — common on Linux/macOS
+ *
+ * Returns a function that reads one table, or throws if neither is available.
+ */
+function makeReader() {
+  // Preferred: the built-in module. No external command needed.
+  try {
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(SQLITE_PATH, { readOnly: true });
+    console.log("  (reading with Node's built-in SQLite support)\n");
+    return {
+      tables: () =>
+        db
+          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+          .all()
+          .map((r) => r.name),
+      read: (table) => db.prepare(`SELECT * FROM "${table}"`).all(),
+    };
+  } catch (err) {
+    if (err && err.code !== "ERR_UNKNOWN_BUILTIN_MODULE" && !/Cannot find module/.test(err.message)) {
+      // The module exists but the file itself failed to open — that's fatal.
+      throw new Error(`Could not open ${SQLITE_PATH}: ${err.message}`);
+    }
+  }
+
+  // Fallback: the sqlite3 CLI.
+  try {
+    execFileSync("sqlite3", ["-version"], { stdio: "ignore" });
+  } catch {
+    throw new Error(
+      "No way to read the SQLite file.\n" +
+        "        Either use Node 22.5 or newer (it has SQLite built in),\n" +
+        "        or install the sqlite3 command-line tool.",
+    );
+  }
+  console.log("  (reading with the sqlite3 command-line tool)\n");
+  const q = (sql) => {
+    const out = execFileSync("sqlite3", [SQLITE_PATH, "-json", sql], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }).trim();
+    return out ? JSON.parse(out) : [];
+  };
+  return {
+    tables: () => q("SELECT name FROM sqlite_master WHERE type='table';").map((r) => r.name),
+    read: (table) => q(`SELECT * FROM "${table}";`),
+  };
 }
 
 /** SQLite stores datetimes as epoch-ms integers or ISO strings. */
@@ -48,6 +91,9 @@ async function main() {
     console.error("DATABASE_URL must point at your Postgres database before running this.");
     process.exit(1);
   }
+
+  const reader = makeReader();
+  const present = new Set(reader.tables());
 
   const prisma = new PrismaClient();
 
@@ -154,19 +200,36 @@ async function main() {
     })],
   ];
 
+  let totalCopied = 0;
+
   for (const [table, upsert] of steps) {
-    let rows = [];
-    try {
-      rows = readSqliteTable(table);
-    } catch {
-      console.log(`  ${table.padEnd(18)} — table not present in SQLite, skipped`);
+    if (!present.has(table)) {
+      console.log(`  ${table.padEnd(18)} — not in the SQLite file, skipped`);
       continue;
     }
-    for (const row of rows) await upsert(row);
-    console.log(`  ${table.padEnd(18)} ${String(rows.length).padStart(4)} row(s) copied`);
+
+    const rows = reader.read(table);
+    let copied = 0;
+    for (const row of rows) {
+      try {
+        await upsert(row);
+        copied++;
+      } catch (err) {
+        console.log(`  ${table.padEnd(18)} ! row ${row.id ?? "?"} failed: ${err.message.split("\n")[0]}`);
+      }
+    }
+    totalCopied += copied;
+    console.log(`  ${table.padEnd(18)} ${String(copied).padStart(4)} of ${rows.length} row(s) copied`);
   }
 
-  console.log("\nDone. Verify with: npx prisma studio");
+  if (totalCopied === 0) {
+    console.log(
+      "\nNothing was copied. The SQLite file appears to be empty —" +
+        "\nrun `npm run db:seed` instead to create the rooms and login accounts.",
+    );
+  } else {
+    console.log(`\nDone — ${totalCopied} row(s) imported. Verify with: npx prisma studio`);
+  }
   await prisma.$disconnect();
 }
 

@@ -11,6 +11,18 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Vercel Cron calls the automation endpoint with a bearer token instead of a
+  // session cookie. Let those through so scheduled check-outs still run when
+  // nobody has the dashboard open; the route re-checks the secret itself.
+  const cronSecret = process.env.CRON_SECRET;
+  if (
+    cronSecret &&
+    pathname === "/api/bookings/auto-process" &&
+    request.headers.get("authorization") === `Bearer ${cronSecret}`
+  ) {
+    return NextResponse.next();
+  }
+
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await verifySessionToken(token) : null;
 

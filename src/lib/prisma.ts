@@ -5,25 +5,12 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function createPrismaClient() {
-  const client = new PrismaClient({
+  // PRAGMA tuning used to run here for SQLite. Those statements are invalid on
+  // PostgreSQL and logged a "syntax error at or near PRAGMA" on every cold
+  // start, so they've been removed — Postgres needs no equivalent setup.
+  return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
-
-  client.$connect().then(async () => {
-    const pragmas = [
-      "PRAGMA journal_mode = WAL;",
-      "PRAGMA synchronous = NORMAL;",
-      "PRAGMA cache_size = -32000;",
-      "PRAGMA temp_store = MEMORY;",
-      "PRAGMA mmap_size = 268435456;",
-      "PRAGMA busy_timeout = 5000;",
-    ];
-    for (const p of pragmas) {
-      await client.$queryRawUnsafe(p).catch(() => {});
-    }
-  });
-
-  return client;
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
