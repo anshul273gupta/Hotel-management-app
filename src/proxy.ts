@@ -22,8 +22,10 @@ const PUBLIC_FILES = new Set([
 
 function isPublicFile(pathname: string) {
   if (PUBLIC_FILES.has(pathname)) return true;
-  // Icons and vector assets referenced by the manifest / login page.
-  return /^\/(?:icon-\d+\.png|[\w-]+\.svg)$/.test(pathname);
+  // Icons and vector assets referenced by the manifest, the install prompt and
+  // the login page: icon-192.png, icon-maskable-512.png, apple-touch-icon.png,
+  // globe.svg and so on.
+  return /^\/(?:icon-[\w-]+\.png|apple-touch-icon[\w-]*\.png|[\w-]+\.svg)$/.test(pathname);
 }
 
 export async function proxy(request: NextRequest) {

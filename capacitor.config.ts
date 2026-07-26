@@ -1,44 +1,30 @@
 import type { CapacitorConfig } from '@capacitor/cli';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
-import { networkInterfaces } from 'os';
 
-// At sync time: prefer tunnel URL, fall back to current LAN IP
-function getServerUrl(): string {
-  // 1. Live tunnel URL written by start-hotel.js
-  try {
-    const tunnelFile = join(__dirname, '.tunnel-url');
-    if (existsSync(tunnelFile)) {
-      const url = readFileSync(tunnelFile, 'utf-8').trim();
-      // Only accept real tunnel URLs — not localhost.run's own admin portal
-      const isTunnel = /https:\/\/[a-z0-9-]+\.(localhost\.run|serveo\.net|ngrok\.io|ngrok-free\.app|loca\.lt)/.test(url);
-      if (isTunnel) return url;
-    }
-  } catch {}
+/**
+ * The Android wrapper loads the deployed site rather than bundling a copy of
+ * it, so staff always get the current version without reinstalling the APK.
+ *
+ * Set CAP_SERVER_URL when building against something else (a LAN address or a
+ * tunnel while developing). Previously this file auto-detected a tunnel URL
+ * from .tunnel-url or guessed a Wi-Fi IP — both went stale the moment the
+ * laptop moved network, leaving the installed app pointing at nothing.
+ */
+const PRODUCTION_URL = 'https://hotel-management-app-smoky-delta.vercel.app';
 
-  // 2. Auto-detect current Wi-Fi IP
-  const SKIP = /vmware|virtualbox|vethernet|hyper-v|docker|wsl|loopback/i;
-  const nets = networkInterfaces();
-  for (const [name, addrs] of Object.entries(nets)) {
-    for (const a of addrs ?? []) {
-      if (a.family === 'IPv4' && !a.internal && !SKIP.test(name))
-        return `http://${a.address}:3000`;
-    }
-  }
-
-  return 'http://192.168.29.10:3000';
-}
-
-const serverUrl = getServerUrl();
-console.log(`[Capacitor] server.url → ${serverUrl}`);
+const serverUrl = process.env.CAP_SERVER_URL?.trim() || PRODUCTION_URL;
 
 const config: CapacitorConfig = {
   appId: 'com.AgrawalInn.hotelmanagement',
   appName: 'Hotel Agrawal Inn',
-  webDir: 'out',
+  // Only used if server.url is removed and the app runs fully offline.
+  webDir: 'public',
   server: {
     url: serverUrl,
+    // Plain http is only tolerated for local development builds.
     cleartext: !serverUrl.startsWith('https'),
+  },
+  android: {
+    backgroundColor: '#052e16',
   },
 };
 

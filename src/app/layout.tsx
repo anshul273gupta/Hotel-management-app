@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
@@ -22,7 +22,29 @@ const playfair = Playfair_Display({
 export const metadata: Metadata = {
   title: "Hotel Agrawal Inn — Management Suite",
   description: "Premium hotel management & room inventory system",
-  icons: { icon: "/favicon.png" },
+  // Lets Android and iOS install the site as a standalone app.
+  manifest: "/manifest.json",
+  applicationName: "Agrawal Inn",
+  icons: {
+    icon: "/favicon.png",
+    apple: "/apple-touch-icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Agrawal Inn",
+    // Dark status bar text over the app's deep green header.
+    statusBarStyle: "black-translucent",
+  },
+  formatDetection: { telephone: false },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#052e16",
+  // Full-bleed on notched phones, and stop iOS zooming when a field is focused.
+  viewportFit: "cover",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({
