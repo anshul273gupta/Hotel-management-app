@@ -1,0 +1,2205 @@
+From 9599ef2586c0216db6fe6f1063ebd88b66481ae3 Mon Sep 17 00:00:00 2001
+From: dev <dev@local>
+Date: Sat, 25 Jul 2026 14:52:33 +0000
+Subject: [PATCH] Fix critical bugs and migrate SQLite -> PostgreSQL for Vercel
+
+Deployment
+- Switch Prisma datasource from SQLite to PostgreSQL. SQLite cannot run on
+  Vercel's read-only serverless filesystem, so every DB query returned HTTP 500
+  and login was impossible. Add pooled DATABASE_URL + DIRECT_URL for migrations.
+- Give all money columns explicit Decimal(10,2) precision.
+- Regenerate migrations for Postgres; add scripts/migrate-sqlite-to-postgres.js
+  to carry existing guests/bookings/payments across.
+- Run prisma generate && migrate deploy during build so tables exist on deploy.
+- Add .env.example and DEPLOY.md; stop tracking prisma/*.db.
+
+Security
+- Fix auth bypass: the middleware matcher excluded any path starting with
+  'guest', so /guests and /api/guests/lookup were fully public, exposing the
+  guest register (names, mobiles, addresses, ID proof numbers). Anchor the
+  exclusions so only /guest/<token> and /api/guest/* stay public.
+- Require the room QR token when a guest rates a service request; previously
+  any visitor could rate arbitrary request IDs.
+- Scope guest request history to the current stay so the next occupant of a
+  room can't read the previous guest's requests.
+- Require an authenticated manager/owner for the QR base-URL settings endpoint.
+- Validate uploads (type + 8MB limit) and derive the extension from the MIME
+  type instead of the attacker-controlled filename.
+
+Booking logic
+- A reservation weeks away no longer marks a room RESERVED immediately, which
+  had made the room unsellable for tonight. Introduce syncRoomStatus() as the
+  single source of truth, deriving status from live bookings with a 24h
+  look-ahead, and use it from every mutation.
+- Walk-in check-in now checks for date overlap instead of the room's current
+  status flag.
+- Fix check-out leaving a room AVAILABLE when it still held a reservation.
+- Fix delay-arrival dragging a future reservation back to today, destroying the
+  booking date; only the time of day now moves.
+- Don't write a zero/negative payment row when settling an over-paid booking.
+
+Correctness
+- Fix cascading-render lint errors in the nav badges via a shared
+  usePendingRequestCount hook.
+- Replace require() with dynamic import in firebase-admin and stop retrying
+  initialisation on every notification.
+---
+ .gitignore                                    |   4 +-
+ DEPLOY.md                                     | 159 ++++++++++++++++
+ package-lock.json                             | 114 ------------
+ package.json                                  |   5 +-
+ .../migration.sql                             |  14 --
+ .../migration.sql                             |   1 -
+ .../migration.sql                             |   2 -
+ .../migration.sql                             |   2 -
+ .../migration.sql                             |   2 -
+ .../migration.sql                             |   2 -
+ .../20260618160102_init/migration.sql         | 167 -----------------
+ .../migration.sql                             |  90 +++------
+ prisma/migrations/migration_lock.toml         |   2 +-
+ prisma/schema.prisma                          |  19 +-
+ scripts/migrate-sqlite-to-postgres.js         | 176 ++++++++++++++++++
+ src/app/api/bookings/[id]/checkin/route.ts    |  13 +-
+ src/app/api/bookings/[id]/checkout/route.ts   |  14 +-
+ .../api/bookings/[id]/delay-arrival/route.ts  |  13 +-
+ src/app/api/bookings/[id]/payment/route.ts    |  22 +++
+ src/app/api/bookings/reservations/route.ts    |  17 +-
+ src/app/api/bookings/route.ts                 |  30 +--
+ .../api/guest/service-requests/[id]/route.ts  |   8 +-
+ src/app/api/guest/service-requests/route.ts   |  31 ++-
+ src/app/api/qr-settings/route.ts              |  49 +++--
+ src/app/api/rooms/[id]/route.ts               |  16 +-
+ src/components/checkin/checkin-form.tsx       |   1 -
+ src/components/dashboard/mobile-nav.tsx       |  21 +--
+ src/components/dashboard/sidebar-nav.tsx      |  21 +--
+ src/components/guest/service-request-page.tsx |   4 +-
+ src/components/rooms/room-card.tsx            |   3 -
+ src/hooks/use-pending-request-count.ts        |  48 +++++
+ src/lib/booking-automation.ts                 |  25 ++-
+ src/lib/firebase-admin.ts                     |  21 ++-
+ src/lib/rooms.ts                              |  83 +++++++--
+ src/lib/storage.ts                            |  20 +-
+ src/proxy.ts                                  |   7 +-
+ 36 files changed, 705 insertions(+), 521 deletions(-)
+ create mode 100644 DEPLOY.md
+ delete mode 100644 prisma/migrations/20260614121930_remove_inventory/migration.sql
+ delete mode 100644 prisma/migrations/20260614133221_add_reservation_notification_type/migration.sql
+ delete mode 100644 prisma/migrations/20260614185208_add_id_proof_number/migration.sql
+ delete mode 100644 prisma/migrations/20260615083145_add_payment_reminder_sent_at/migration.sql
+ delete mode 100644 prisma/migrations/20260616182532_add_reserved_room_status/migration.sql
+ delete mode 100644 prisma/migrations/20260617062848_add_guest_title/migration.sql
+ delete mode 100644 prisma/migrations/20260618160102_init/migration.sql
+ rename prisma/migrations/{20260614100501_init => 20260725143910_init_postgres}/migration.sql (73%)
+ create mode 100644 scripts/migrate-sqlite-to-postgres.js
+ create mode 100644 src/hooks/use-pending-request-count.ts
+
+diff --git a/.gitignore b/.gitignore
+index 0daa8cc..a895f8b 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -40,7 +40,9 @@ yarn-error.log*
+ *.tsbuildinfo
+ next-env.d.ts
+ 
+-# SQLite WAL/SHM lock files (created while DB is open; never commit these)
++# Local database files — never commit these. They contain real guest data and
++# password hashes. The app now uses Postgres via DATABASE_URL.
++prisma/*.db
+ prisma/*.db-shm
+ prisma/*.db-wal
+ 
+diff --git a/DEPLOY.md b/DEPLOY.md
+new file mode 100644
+index 0000000..a0b6628
+--- /dev/null
++++ b/DEPLOY.md
+@@ -0,0 +1,159 @@
++# Deploying Hotel Agrawal Inn to Vercel (Postgres)
++
++The app previously used **SQLite** (`prisma/hotel.db`). That cannot work on
++Vercel: serverless functions get a **read-only, temporary filesystem**, so there
++is nowhere to keep the database file. Every request that touched the database
++returned **HTTP 500**, which is why login failed with "Unable to sign in".
++
++The app now uses **PostgreSQL**. Follow these steps once.
++
++---
++
++## Step 1 — Create a free Postgres database (Neon)
++
++1. Go to <https://neon.tech> and sign up (free tier is plenty for a hotel).
++2. Create a project — pick the region closest to you (Singapore or Mumbai for India).
++3. On the dashboard, open **Connection Details** and copy **two** strings:
++   - the **Pooled connection** string → this is your `DATABASE_URL`
++   - the **Direct connection** string → this is your `DIRECT_URL`
++
++Both look like:
++
++```
++postgresql://user:password@ep-xxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
++```
++
++The pooled one contains `-pooler`. The direct one does not.
++
++> Supabase works too — use the **Transaction pooler** URL for `DATABASE_URL`
++> and the **Direct connection** URL for `DIRECT_URL`.
++
++---
++
++## Step 2 — Add environment variables in Vercel
++
++Vercel dashboard → your project → **Settings** → **Environment Variables**.
++Add these three for **Production, Preview and Development**:
++
++| Name | Value |
++|---|---|
++| `DATABASE_URL` | the **pooled** Neon string |
++| `DIRECT_URL` | the **direct** Neon string |
++| `AUTH_SECRET` | a long random string — see below |
++
++Generate a strong `AUTH_SECRET`:
++
++```bash
++node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
++```
++
++> ⚠️ **`AUTH_SECRET` is required.** Without it the login route throws
++> `AUTH_SECRET environment variable is not set` and every sign-in fails.
++> Changing it later logs everyone out (it invalidates existing session cookies).
++
++Optional:
++
++| Name | Value |
++|---|---|
++| `APP_BASE_URL` | `https://your-app.vercel.app` — used for room QR code links |
++
++---
++
++## Step 3 — Deploy
++
++Push to GitHub. Vercel redeploys automatically.
++
++The `build` script now runs `prisma generate && prisma migrate deploy` before
++`next build`, so **the database tables are created automatically** on the first
++deploy. You don't need to run migrations by hand.
++
++---
++
++## Step 4 — Create your login users
++
++The new database is empty, so seed it. Locally, point at the **same** Neon
++database and run:
++
++```bash
++# .env in the project root
++DATABASE_URL="<pooled Neon string>"
++DIRECT_URL="<direct Neon string>"
++AUTH_SECRET="<the same secret you set in Vercel>"
++```
++
++```bash
++npm install
++npm run db:seed
++```
++
++That creates the rooms and both accounts.
++
++### Bringing your existing data across (optional)
++
++If you have real bookings and guests in the old `prisma/hotel.db`, copy them
++into Postgres instead of seeding:
++
++```bash
++npm run db:migrate        # create the tables
++npm run db:import-sqlite  # copy users, rooms, guests, bookings, payments...
++```
++
++The importer is safe to re-run — rows are matched by primary key, so an
++interrupted run can just be started again. It needs the `sqlite3` command
++available and reads `prisma/hotel.db` directly.
++
++---
++
++## Step 5 — Change the passwords 🔒
++
++`prisma/hotel.db` was committed to the GitHub repo, and it contains the bcrypt
++password hashes for both accounts. Anyone who cloned the repo can crack a weak
++password offline. `AI9406851411` (initials + a phone number) is weak.
++
++Do all of these:
++
++1. **Change both passwords** to something long and random.
++2. Give the manager and the owner **separate usernames** — they currently share
++   `Hotel Agrawal Inn`, so the password alone decides which role you get.
++3. The database file is now in `.gitignore`, but it is still in the repo's git
++   **history**. To remove it properly:
++
++```bash
++git rm --cached prisma/hotel.db prisma/dev.db
++git commit -m "Stop tracking local database files"
++```
++
++   For a full history purge use
++   [git-filter-repo](https://github.com/newren/git-filter-repo).
++
++To change a password, edit `prisma/seed.ts` and re-run `npm run db:seed`
++(this wipes and recreates the data), or update the hash directly:
++
++```bash
++node -e "require('bcryptjs').hash('YOUR-NEW-PASSWORD',10).then(console.log)"
++```
++
++---
++
++## Running locally
++
++You can keep using Postgres locally (point `.env` at Neon), or install Postgres
++on your PC. The old `Start Hotel.bat` one-click launcher still works — it just
++needs a `.env` with the variables above.
++
++```bash
++npm install
++npm run dev     # http://localhost:3000
++```
++
++---
++
++## Troubleshooting
++
++| Symptom | Cause |
++|---|---|
++| `500` on login, empty response | `DATABASE_URL` missing or wrong in Vercel |
++| `AUTH_SECRET environment variable is not set` | Add `AUTH_SECRET` in Vercel |
++| `Can't reach database server` | Neon string missing `?sslmode=require` |
++| `prepared statement "s0" already exists` | Using the **direct** URL as `DATABASE_URL` — use the **pooled** one |
++| Tables don't exist | First deploy didn't run `prisma migrate deploy`; run `npm run db:migrate` locally against the same DB |
+diff --git a/package-lock.json b/package-lock.json
+index 4cba48c..0e5bd44 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -2664,9 +2664,6 @@
+       "cpu": [
+         "arm"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2683,9 +2680,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2702,9 +2696,6 @@
+       "cpu": [
+         "ppc64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2721,9 +2712,6 @@
+       "cpu": [
+         "riscv64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2740,9 +2728,6 @@
+       "cpu": [
+         "s390x"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2759,9 +2744,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2778,9 +2760,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2797,9 +2776,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "LGPL-3.0-or-later",
+       "optional": true,
+       "os": [
+@@ -2816,9 +2792,6 @@
+       "cpu": [
+         "arm"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2841,9 +2814,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2866,9 +2836,6 @@
+       "cpu": [
+         "ppc64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2891,9 +2858,6 @@
+       "cpu": [
+         "riscv64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2916,9 +2880,6 @@
+       "cpu": [
+         "s390x"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2941,9 +2902,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2966,9 +2924,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -2991,9 +2946,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "Apache-2.0",
+       "optional": true,
+       "os": [
+@@ -3553,9 +3505,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -3572,9 +3521,6 @@
+       "cpu": [
+         "arm64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -3591,9 +3537,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -3610,9 +3553,6 @@
+       "cpu": [
+         "x64"
+       ],
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4122,9 +4062,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4142,9 +4079,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4162,9 +4096,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4182,9 +4113,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4972,9 +4900,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -4989,9 +4914,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5006,9 +4928,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5023,9 +4942,6 @@
+         "loong64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5040,9 +4956,6 @@
+         "ppc64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5057,9 +4970,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5074,9 +4984,6 @@
+         "riscv64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5091,9 +4998,6 @@
+         "s390x"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5108,9 +5012,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -5125,9 +5026,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MIT",
+       "optional": true,
+       "os": [
+@@ -10286,9 +10184,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -10310,9 +10205,6 @@
+         "arm64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -10334,9 +10226,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "glibc"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+@@ -10358,9 +10247,6 @@
+         "x64"
+       ],
+       "dev": true,
+-      "libc": [
+-        "musl"
+-      ],
+       "license": "MPL-2.0",
+       "optional": true,
+       "os": [
+diff --git a/package.json b/package.json
+index 48e678b..85586ea 100644
+--- a/package.json
++++ b/package.json
+@@ -4,7 +4,10 @@
+   "private": true,
+   "scripts": {
+     "dev": "next dev",
+-    "build": "next build",
++    "build": "prisma generate && prisma migrate deploy && next build",
++    "postinstall": "prisma generate",
++    "db:migrate": "prisma migrate deploy",
++    "db:import-sqlite": "node scripts/migrate-sqlite-to-postgres.js",
+     "start": "next start",
+     "lint": "eslint",
+     "db:seed": "tsx prisma/seed.ts"
+diff --git a/prisma/migrations/20260614121930_remove_inventory/migration.sql b/prisma/migrations/20260614121930_remove_inventory/migration.sql
+deleted file mode 100644
+index e115d72..0000000
+--- a/prisma/migrations/20260614121930_remove_inventory/migration.sql
++++ /dev/null
+@@ -1,14 +0,0 @@
+--- Remove rows that use the NotificationType value being dropped
+-DELETE FROM "notifications" WHERE "type" = 'LOW_STOCK';
+-
+--- DropTable
+-DROP TABLE "inventory_items";
+-
+--- AlterEnum
+-BEGIN;
+-CREATE TYPE "NotificationType_new" AS ENUM ('CHECK_IN', 'CHECK_OUT', 'SERVICE_REQUEST', 'MAINTENANCE', 'PENDING_PAYMENT', 'WHATSAPP', 'HOUSEKEEPING');
+-ALTER TABLE "notifications" ALTER COLUMN "type" TYPE "NotificationType_new" USING ("type"::text::"NotificationType_new");
+-ALTER TYPE "NotificationType" RENAME TO "NotificationType_old";
+-ALTER TYPE "NotificationType_new" RENAME TO "NotificationType";
+-DROP TYPE "NotificationType_old";
+-COMMIT;
+diff --git a/prisma/migrations/20260614133221_add_reservation_notification_type/migration.sql b/prisma/migrations/20260614133221_add_reservation_notification_type/migration.sql
+deleted file mode 100644
+index 4a1aa03..0000000
+--- a/prisma/migrations/20260614133221_add_reservation_notification_type/migration.sql
++++ /dev/null
+@@ -1 +0,0 @@
+-ALTER TYPE "NotificationType" ADD VALUE 'RESERVATION';
+diff --git a/prisma/migrations/20260614185208_add_id_proof_number/migration.sql b/prisma/migrations/20260614185208_add_id_proof_number/migration.sql
+deleted file mode 100644
+index 1dddf9c..0000000
+--- a/prisma/migrations/20260614185208_add_id_proof_number/migration.sql
++++ /dev/null
+@@ -1,2 +0,0 @@
+--- AlterTable
+-ALTER TABLE "guests" ADD COLUMN     "idProofNumber" TEXT;
+diff --git a/prisma/migrations/20260615083145_add_payment_reminder_sent_at/migration.sql b/prisma/migrations/20260615083145_add_payment_reminder_sent_at/migration.sql
+deleted file mode 100644
+index 0b2c177..0000000
+--- a/prisma/migrations/20260615083145_add_payment_reminder_sent_at/migration.sql
++++ /dev/null
+@@ -1,2 +0,0 @@
+--- AlterTable
+-ALTER TABLE "bookings" ADD COLUMN     "paymentReminderSentAt" TIMESTAMP(3);
+diff --git a/prisma/migrations/20260616182532_add_reserved_room_status/migration.sql b/prisma/migrations/20260616182532_add_reserved_room_status/migration.sql
+deleted file mode 100644
+index 8b66a61..0000000
+--- a/prisma/migrations/20260616182532_add_reserved_room_status/migration.sql
++++ /dev/null
+@@ -1,2 +0,0 @@
+--- AlterEnum
+-ALTER TYPE "RoomStatus" ADD VALUE 'RESERVED';
+diff --git a/prisma/migrations/20260617062848_add_guest_title/migration.sql b/prisma/migrations/20260617062848_add_guest_title/migration.sql
+deleted file mode 100644
+index 471c85f..0000000
+--- a/prisma/migrations/20260617062848_add_guest_title/migration.sql
++++ /dev/null
+@@ -1,2 +0,0 @@
+--- AlterTable
+-ALTER TABLE "guests" ADD COLUMN     "title" TEXT;
+diff --git a/prisma/migrations/20260618160102_init/migration.sql b/prisma/migrations/20260618160102_init/migration.sql
+deleted file mode 100644
+index 8e621ca..0000000
+--- a/prisma/migrations/20260618160102_init/migration.sql
++++ /dev/null
+@@ -1,167 +0,0 @@
+--- CreateTable
+-CREATE TABLE "users" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "name" TEXT NOT NULL,
+-    "email" TEXT NOT NULL,
+-    "phone" TEXT,
+-    "passwordHash" TEXT NOT NULL,
+-    "role" TEXT NOT NULL DEFAULT 'STAFF',
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+-);
+-
+--- CreateTable
+-CREATE TABLE "rooms" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "number" TEXT NOT NULL,
+-    "type" TEXT NOT NULL,
+-    "floor" INTEGER NOT NULL DEFAULT 1,
+-    "basePrice" DECIMAL NOT NULL,
+-    "cleaningStatus" TEXT NOT NULL DEFAULT 'CLEAN',
+-    "maintenanceStatus" TEXT NOT NULL DEFAULT 'OK',
+-    "status" TEXT NOT NULL DEFAULT 'AVAILABLE',
+-    "qrToken" TEXT NOT NULL,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "updatedAt" DATETIME NOT NULL
+-);
+-
+--- CreateTable
+-CREATE TABLE "guests" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "title" TEXT,
+-    "name" TEXT NOT NULL,
+-    "mobile" TEXT NOT NULL,
+-    "address" TEXT,
+-    "idProofType" TEXT,
+-    "idProofNumber" TEXT,
+-    "idProofUrl" TEXT,
+-    "specialRequests" TEXT,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "updatedAt" DATETIME NOT NULL
+-);
+-
+--- CreateTable
+-CREATE TABLE "bookings" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "guestId" TEXT NOT NULL,
+-    "roomId" TEXT NOT NULL,
+-    "numberOfGuests" INTEGER NOT NULL DEFAULT 1,
+-    "checkInDate" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "expectedCheckOut" DATETIME NOT NULL,
+-    "actualCheckOut" DATETIME,
+-    "status" TEXT NOT NULL DEFAULT 'CHECKED_IN',
+-    "roomRate" DECIMAL NOT NULL,
+-    "totalAmount" DECIMAL NOT NULL,
+-    "amountPaid" DECIMAL NOT NULL DEFAULT 0,
+-    "paymentStatus" TEXT NOT NULL DEFAULT 'PENDING',
+-    "paymentReminderSentAt" DATETIME,
+-    "notes" TEXT,
+-    "createdById" TEXT NOT NULL,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "updatedAt" DATETIME NOT NULL,
+-    CONSTRAINT "bookings_guestId_fkey" FOREIGN KEY ("guestId") REFERENCES "guests" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+-    CONSTRAINT "bookings_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "rooms" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+-    CONSTRAINT "bookings_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+-);
+-
+--- CreateTable
+-CREATE TABLE "payments" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "bookingId" TEXT NOT NULL,
+-    "amount" DECIMAL NOT NULL,
+-    "method" TEXT NOT NULL DEFAULT 'CASH',
+-    "status" TEXT NOT NULL DEFAULT 'PAID',
+-    "paidAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "recordedById" TEXT NOT NULL,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    CONSTRAINT "payments_bookingId_fkey" FOREIGN KEY ("bookingId") REFERENCES "bookings" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+-    CONSTRAINT "payments_recordedById_fkey" FOREIGN KEY ("recordedById") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+-);
+-
+--- CreateTable
+-CREATE TABLE "expenses" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "category" TEXT NOT NULL,
+-    "description" TEXT,
+-    "amount" DECIMAL NOT NULL,
+-    "date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "createdById" TEXT NOT NULL,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    CONSTRAINT "expenses_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
+-);
+-
+--- CreateTable
+-CREATE TABLE "service_requests" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "roomId" TEXT NOT NULL,
+-    "type" TEXT NOT NULL,
+-    "description" TEXT,
+-    "photoUrl" TEXT,
+-    "status" TEXT NOT NULL DEFAULT 'PENDING',
+-    "assignedToId" TEXT,
+-    "notes" TEXT,
+-    "rating" INTEGER,
+-    "ratingComment" TEXT,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-    "assignedAt" DATETIME,
+-    "completedAt" DATETIME,
+-    "updatedAt" DATETIME NOT NULL,
+-    CONSTRAINT "service_requests_roomId_fkey" FOREIGN KEY ("roomId") REFERENCES "rooms" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+-    CONSTRAINT "service_requests_assignedToId_fkey" FOREIGN KEY ("assignedToId") REFERENCES "users" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+-);
+-
+--- CreateTable
+-CREATE TABLE "notifications" (
+-    "id" TEXT NOT NULL PRIMARY KEY,
+-    "type" TEXT NOT NULL,
+-    "title" TEXT NOT NULL,
+-    "message" TEXT NOT NULL,
+-    "link" TEXT,
+-    "read" BOOLEAN NOT NULL DEFAULT false,
+-    "targetRole" TEXT,
+-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+-);
+-
+--- CreateIndex
+-CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
+-
+--- CreateIndex
+-CREATE UNIQUE INDEX "rooms_number_key" ON "rooms"("number");
+-
+--- CreateIndex
+-CREATE UNIQUE INDEX "rooms_qrToken_key" ON "rooms"("qrToken");
+-
+--- CreateIndex
+-CREATE UNIQUE INDEX "guests_mobile_key" ON "guests"("mobile");
+-
+--- CreateIndex
+-CREATE INDEX "guests_mobile_idx" ON "guests"("mobile");
+-
+--- CreateIndex
+-CREATE INDEX "bookings_guestId_idx" ON "bookings"("guestId");
+-
+--- CreateIndex
+-CREATE INDEX "bookings_roomId_idx" ON "bookings"("roomId");
+-
+--- CreateIndex
+-CREATE INDEX "bookings_status_idx" ON "bookings"("status");
+-
+--- CreateIndex
+-CREATE INDEX "payments_bookingId_idx" ON "payments"("bookingId");
+-
+--- CreateIndex
+-CREATE INDEX "payments_paidAt_idx" ON "payments"("paidAt");
+-
+--- CreateIndex
+-CREATE INDEX "expenses_date_idx" ON "expenses"("date");
+-
+--- CreateIndex
+-CREATE INDEX "service_requests_status_idx" ON "service_requests"("status");
+-
+--- CreateIndex
+-CREATE INDEX "service_requests_roomId_idx" ON "service_requests"("roomId");
+-
+--- CreateIndex
+-CREATE INDEX "notifications_read_idx" ON "notifications"("read");
+-
+--- CreateIndex
+-CREATE INDEX "notifications_createdAt_idx" ON "notifications"("createdAt");
+diff --git a/prisma/migrations/20260614100501_init/migration.sql b/prisma/migrations/20260725143910_init_postgres/migration.sql
+similarity index 73%
+rename from prisma/migrations/20260614100501_init/migration.sql
+rename to prisma/migrations/20260725143910_init_postgres/migration.sql
+index 19d0545..5fe6688 100644
+--- a/prisma/migrations/20260614100501_init/migration.sql
++++ b/prisma/migrations/20260725143910_init_postgres/migration.sql
+@@ -1,44 +1,12 @@
+--- CreateEnum
+-CREATE TYPE "Role" AS ENUM ('STAFF', 'MANAGER', 'OWNER');
+-
+--- CreateEnum
+-CREATE TYPE "RoomType" AS ENUM ('DELUXE', 'PREMIUM', 'SUITE');
+-
+--- CreateEnum
+-CREATE TYPE "CleaningStatus" AS ENUM ('CLEAN', 'CLEANING_IN_PROGRESS', 'DIRTY');
+-
+--- CreateEnum
+-CREATE TYPE "MaintenanceStatus" AS ENUM ('OK', 'NEEDS_MAINTENANCE', 'UNDER_MAINTENANCE');
+-
+--- CreateEnum
+-CREATE TYPE "RoomStatus" AS ENUM ('AVAILABLE', 'OCCUPIED', 'CLEANING', 'MAINTENANCE');
+-
+--- CreateEnum
+-CREATE TYPE "BookingStatus" AS ENUM ('RESERVED', 'CHECKED_IN', 'CHECKED_OUT', 'CANCELLED');
+-
+--- CreateEnum
+-CREATE TYPE "PaymentStatus" AS ENUM ('PAID', 'PARTIAL', 'PENDING');
+-
+--- CreateEnum
+-CREATE TYPE "PaymentMethod" AS ENUM ('CASH', 'CARD', 'UPI', 'BANK_TRANSFER', 'OTHER');
+-
+--- CreateEnum
+-CREATE TYPE "ServiceRequestType" AS ENUM ('HOUSEKEEPING', 'EXTRA_TOWELS', 'WATER_BOTTLE', 'TEA_COFFEE', 'TAXI_BOOKING', 'TEMPLE_INFO', 'CALL_RECEPTION', 'CUSTOM');
+-
+--- CreateEnum
+-CREATE TYPE "ServiceRequestStatus" AS ENUM ('PENDING', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED');
+-
+--- CreateEnum
+-CREATE TYPE "NotificationType" AS ENUM ('CHECK_IN', 'CHECK_OUT', 'SERVICE_REQUEST', 'MAINTENANCE', 'LOW_STOCK', 'PENDING_PAYMENT', 'WHATSAPP', 'HOUSEKEEPING');
+-
+ -- CreateTable
+ CREATE TABLE "users" (
+     "id" TEXT NOT NULL,
+     "name" TEXT NOT NULL,
+     "email" TEXT NOT NULL,
++    "username" TEXT,
+     "phone" TEXT,
+     "passwordHash" TEXT NOT NULL,
+-    "role" "Role" NOT NULL DEFAULT 'STAFF',
++    "role" TEXT NOT NULL DEFAULT 'STAFF',
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ 
+     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+@@ -48,12 +16,12 @@ CREATE TABLE "users" (
+ CREATE TABLE "rooms" (
+     "id" TEXT NOT NULL,
+     "number" TEXT NOT NULL,
+-    "type" "RoomType" NOT NULL,
++    "type" TEXT NOT NULL,
+     "floor" INTEGER NOT NULL DEFAULT 1,
+     "basePrice" DECIMAL(10,2) NOT NULL,
+-    "cleaningStatus" "CleaningStatus" NOT NULL DEFAULT 'CLEAN',
+-    "maintenanceStatus" "MaintenanceStatus" NOT NULL DEFAULT 'OK',
+-    "status" "RoomStatus" NOT NULL DEFAULT 'AVAILABLE',
++    "cleaningStatus" TEXT NOT NULL DEFAULT 'CLEAN',
++    "maintenanceStatus" TEXT NOT NULL DEFAULT 'OK',
++    "status" TEXT NOT NULL DEFAULT 'AVAILABLE',
+     "qrToken" TEXT NOT NULL,
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     "updatedAt" TIMESTAMP(3) NOT NULL,
+@@ -64,10 +32,12 @@ CREATE TABLE "rooms" (
+ -- CreateTable
+ CREATE TABLE "guests" (
+     "id" TEXT NOT NULL,
++    "title" TEXT,
+     "name" TEXT NOT NULL,
+     "mobile" TEXT NOT NULL,
+     "address" TEXT,
+     "idProofType" TEXT,
++    "idProofNumber" TEXT,
+     "idProofUrl" TEXT,
+     "specialRequests" TEXT,
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+@@ -85,11 +55,12 @@ CREATE TABLE "bookings" (
+     "checkInDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     "expectedCheckOut" TIMESTAMP(3) NOT NULL,
+     "actualCheckOut" TIMESTAMP(3),
+-    "status" "BookingStatus" NOT NULL DEFAULT 'CHECKED_IN',
++    "status" TEXT NOT NULL DEFAULT 'CHECKED_IN',
+     "roomRate" DECIMAL(10,2) NOT NULL,
+     "totalAmount" DECIMAL(10,2) NOT NULL,
+     "amountPaid" DECIMAL(10,2) NOT NULL DEFAULT 0,
+-    "paymentStatus" "PaymentStatus" NOT NULL DEFAULT 'PENDING',
++    "paymentStatus" TEXT NOT NULL DEFAULT 'PENDING',
++    "paymentReminderSentAt" TIMESTAMP(3),
+     "notes" TEXT,
+     "createdById" TEXT NOT NULL,
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+@@ -103,8 +74,8 @@ CREATE TABLE "payments" (
+     "id" TEXT NOT NULL,
+     "bookingId" TEXT NOT NULL,
+     "amount" DECIMAL(10,2) NOT NULL,
+-    "method" "PaymentMethod" NOT NULL DEFAULT 'CASH',
+-    "status" "PaymentStatus" NOT NULL DEFAULT 'PAID',
++    "method" TEXT NOT NULL DEFAULT 'CASH',
++    "status" TEXT NOT NULL DEFAULT 'PAID',
+     "paidAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     "recordedById" TEXT NOT NULL,
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+@@ -125,28 +96,14 @@ CREATE TABLE "expenses" (
+     CONSTRAINT "expenses_pkey" PRIMARY KEY ("id")
+ );
+ 
+--- CreateTable
+-CREATE TABLE "inventory_items" (
+-    "id" TEXT NOT NULL,
+-    "name" TEXT NOT NULL,
+-    "category" TEXT NOT NULL,
+-    "unit" TEXT NOT NULL,
+-    "currentStock" INTEGER NOT NULL DEFAULT 0,
+-    "minThreshold" INTEGER NOT NULL DEFAULT 0,
+-    "updatedAt" TIMESTAMP(3) NOT NULL,
+-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+-
+-    CONSTRAINT "inventory_items_pkey" PRIMARY KEY ("id")
+-);
+-
+ -- CreateTable
+ CREATE TABLE "service_requests" (
+     "id" TEXT NOT NULL,
+     "roomId" TEXT NOT NULL,
+-    "type" "ServiceRequestType" NOT NULL,
++    "type" TEXT NOT NULL,
+     "description" TEXT,
+     "photoUrl" TEXT,
+-    "status" "ServiceRequestStatus" NOT NULL DEFAULT 'PENDING',
++    "status" TEXT NOT NULL DEFAULT 'PENDING',
+     "assignedToId" TEXT,
+     "notes" TEXT,
+     "rating" INTEGER,
+@@ -159,15 +116,25 @@ CREATE TABLE "service_requests" (
+     CONSTRAINT "service_requests_pkey" PRIMARY KEY ("id")
+ );
+ 
++-- CreateTable
++CREATE TABLE "device_tokens" (
++    "id" TEXT NOT NULL,
++    "token" TEXT NOT NULL,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++    "updatedAt" TIMESTAMP(3) NOT NULL,
++
++    CONSTRAINT "device_tokens_pkey" PRIMARY KEY ("id")
++);
++
+ -- CreateTable
+ CREATE TABLE "notifications" (
+     "id" TEXT NOT NULL,
+-    "type" "NotificationType" NOT NULL,
++    "type" TEXT NOT NULL,
+     "title" TEXT NOT NULL,
+     "message" TEXT NOT NULL,
+     "link" TEXT,
+     "read" BOOLEAN NOT NULL DEFAULT false,
+-    "targetRole" "Role",
++    "targetRole" TEXT,
+     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ 
+     CONSTRAINT "notifications_pkey" PRIMARY KEY ("id")
+@@ -212,6 +179,9 @@ CREATE INDEX "service_requests_status_idx" ON "service_requests"("status");
+ -- CreateIndex
+ CREATE INDEX "service_requests_roomId_idx" ON "service_requests"("roomId");
+ 
++-- CreateIndex
++CREATE UNIQUE INDEX "device_tokens_token_key" ON "device_tokens"("token");
++
+ -- CreateIndex
+ CREATE INDEX "notifications_read_idx" ON "notifications"("read");
+ 
+diff --git a/prisma/migrations/migration_lock.toml b/prisma/migrations/migration_lock.toml
+index 2a5a444..044d57c 100644
+--- a/prisma/migrations/migration_lock.toml
++++ b/prisma/migrations/migration_lock.toml
+@@ -1,3 +1,3 @@
+ # Please do not edit this file manually
+ # It should be added in your version-control system (e.g., Git)
+-provider = "sqlite"
++provider = "postgresql"
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d8265b4..a520493 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -3,8 +3,11 @@ generator client {
+ }
+ 
+ datasource db {
+-  provider = "sqlite"
+-  url      = "file:./hotel.db"
++  provider  = "postgresql"
++  // Pooled connection used by the app at runtime (Neon/Supabase pgBouncer).
++  url       = env("DATABASE_URL")
++  // Direct connection used by `prisma migrate` — pooled connections can't run DDL.
++  directUrl = env("DIRECT_URL")
+ }
+ 
+ // ──────────────────────────────────────────────────────────────────────────
+@@ -34,7 +37,7 @@ model Room {
+   number            String   @unique
+   type              String
+   floor             Int      @default(1)
+-  basePrice         Decimal
++  basePrice         Decimal  @db.Decimal(10, 2)
+   cleaningStatus    String   @default("CLEAN")
+   maintenanceStatus String   @default("OK")
+   status            String   @default("AVAILABLE")
+@@ -76,9 +79,9 @@ model Booking {
+   expectedCheckOut      DateTime
+   actualCheckOut        DateTime?
+   status                String    @default("CHECKED_IN")
+-  roomRate              Decimal
+-  totalAmount           Decimal
+-  amountPaid            Decimal   @default(0)
++  roomRate              Decimal   @db.Decimal(10, 2)
++  totalAmount           Decimal   @db.Decimal(10, 2)
++  amountPaid            Decimal   @default(0) @db.Decimal(10, 2)
+   paymentStatus         String    @default("PENDING")
+   paymentReminderSentAt DateTime?
+   notes                 String?
+@@ -100,7 +103,7 @@ model Booking {
+ model Payment {
+   id           String   @id @default(cuid())
+   bookingId    String
+-  amount       Decimal
++  amount       Decimal  @db.Decimal(10, 2)
+   method       String   @default("CASH")
+   status       String   @default("PAID")
+   paidAt       DateTime @default(now())
+@@ -119,7 +122,7 @@ model Expense {
+   id          String   @id @default(cuid())
+   category    String
+   description String?
+-  amount      Decimal
++  amount      Decimal  @db.Decimal(10, 2)
+   date        DateTime @default(now())
+   createdById String
+   createdAt   DateTime @default(now())
+diff --git a/scripts/migrate-sqlite-to-postgres.js b/scripts/migrate-sqlite-to-postgres.js
+new file mode 100644
+index 0000000..1dab2fa
+--- /dev/null
++++ b/scripts/migrate-sqlite-to-postgres.js
+@@ -0,0 +1,176 @@
++#!/usr/bin/env node
++/**
++ * One-time data migration: copies everything from the old SQLite file
++ * (prisma/hotel.db) into the Postgres database pointed at by DATABASE_URL.
++ *
++ *   node scripts/migrate-sqlite-to-postgres.js
++ *
++ * Safe to re-run: rows are upserted by primary key, so an interrupted run can
++ * simply be started again. Tables are written parents-first so foreign keys
++ * always resolve.
++ */
++
++const path = require("path");
++const fs = require("fs");
++const { execFileSync } = require("child_process");
++const { PrismaClient } = require("@prisma/client");
++
++const SQLITE_PATH = path.join(__dirname, "..", "prisma", "hotel.db");
++
++function readSqliteTable(table) {
++  // Uses the sqlite3 CLI in JSON mode so we don't need a native driver.
++  const out = execFileSync("sqlite3", [SQLITE_PATH, "-json", `SELECT * FROM "${table}";`], {
++    encoding: "utf8",
++    maxBuffer: 64 * 1024 * 1024,
++  }).trim();
++  return out ? JSON.parse(out) : [];
++}
++
++/** SQLite stores datetimes as epoch-ms integers or ISO strings. */
++function toDate(value) {
++  if (value === null || value === undefined || value === "") return null;
++  if (typeof value === "number") return new Date(value);
++  const asNumber = Number(value);
++  if (!Number.isNaN(asNumber) && String(value).trim() !== "") return new Date(asNumber);
++  return new Date(value);
++}
++
++function toBool(value) {
++  return value === 1 || value === true || value === "1";
++}
++
++async function main() {
++  if (!fs.existsSync(SQLITE_PATH)) {
++    console.error(`No SQLite database found at ${SQLITE_PATH} — nothing to migrate.`);
++    process.exit(1);
++  }
++  if (!process.env.DATABASE_URL || !process.env.DATABASE_URL.startsWith("postgres")) {
++    console.error("DATABASE_URL must point at your Postgres database before running this.");
++    process.exit(1);
++  }
++
++  const prisma = new PrismaClient();
++
++  // Parents before children so every foreign key has something to point at.
++  const steps = [
++    ["users", (r) => prisma.user.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, name: r.name, email: r.email, username: r.username ?? null,
++        phone: r.phone ?? null, passwordHash: r.passwordHash, role: r.role,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++      },
++    })],
++    ["rooms", (r) => prisma.room.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, number: r.number, type: r.type, floor: r.floor,
++        basePrice: r.basePrice, cleaningStatus: r.cleaningStatus,
++        maintenanceStatus: r.maintenanceStatus, status: r.status, qrToken: r.qrToken,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++        updatedAt: toDate(r.updatedAt) ?? new Date(),
++      },
++    })],
++    ["guests", (r) => prisma.guest.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, title: r.title ?? null, name: r.name, mobile: r.mobile,
++        address: r.address ?? null, idProofType: r.idProofType ?? null,
++        idProofNumber: r.idProofNumber ?? null, idProofUrl: r.idProofUrl ?? null,
++        specialRequests: r.specialRequests ?? null,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++        updatedAt: toDate(r.updatedAt) ?? new Date(),
++      },
++    })],
++    ["bookings", (r) => prisma.booking.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, guestId: r.guestId, roomId: r.roomId,
++        numberOfGuests: r.numberOfGuests,
++        checkInDate: toDate(r.checkInDate) ?? new Date(),
++        expectedCheckOut: toDate(r.expectedCheckOut) ?? new Date(),
++        actualCheckOut: toDate(r.actualCheckOut),
++        status: r.status, roomRate: r.roomRate, totalAmount: r.totalAmount,
++        amountPaid: r.amountPaid, paymentStatus: r.paymentStatus,
++        paymentReminderSentAt: toDate(r.paymentReminderSentAt),
++        notes: r.notes ?? null, createdById: r.createdById,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++        updatedAt: toDate(r.updatedAt) ?? new Date(),
++      },
++    })],
++    ["payments", (r) => prisma.payment.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, bookingId: r.bookingId, amount: r.amount, method: r.method,
++        status: r.status, paidAt: toDate(r.paidAt) ?? new Date(),
++        recordedById: r.recordedById, createdAt: toDate(r.createdAt) ?? new Date(),
++      },
++    })],
++    ["expenses", (r) => prisma.expense.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, category: r.category, description: r.description ?? null,
++        amount: r.amount, date: toDate(r.date) ?? new Date(),
++        createdById: r.createdById, createdAt: toDate(r.createdAt) ?? new Date(),
++      },
++    })],
++    ["service_requests", (r) => prisma.serviceRequest.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, roomId: r.roomId, type: r.type, description: r.description ?? null,
++        photoUrl: r.photoUrl ?? null, status: r.status,
++        assignedToId: r.assignedToId ?? null, notes: r.notes ?? null,
++        rating: r.rating ?? null, ratingComment: r.ratingComment ?? null,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++        assignedAt: toDate(r.assignedAt), completedAt: toDate(r.completedAt),
++        updatedAt: toDate(r.updatedAt) ?? new Date(),
++      },
++    })],
++    ["device_tokens", (r) => prisma.deviceToken.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, token: r.token,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++        updatedAt: toDate(r.updatedAt) ?? new Date(),
++      },
++    })],
++    ["notifications", (r) => prisma.notification.upsert({
++      where: { id: r.id },
++      update: {},
++      create: {
++        id: r.id, type: r.type, title: r.title, message: r.message,
++        link: r.link ?? null, read: toBool(r.read),
++        targetRole: r.targetRole ?? null,
++        createdAt: toDate(r.createdAt) ?? new Date(),
++      },
++    })],
++  ];
++
++  for (const [table, upsert] of steps) {
++    let rows = [];
++    try {
++      rows = readSqliteTable(table);
++    } catch {
++      console.log(`  ${table.padEnd(18)} — table not present in SQLite, skipped`);
++      continue;
++    }
++    for (const row of rows) await upsert(row);
++    console.log(`  ${table.padEnd(18)} ${String(rows.length).padStart(4)} row(s) copied`);
++  }
++
++  console.log("\nDone. Verify with: npx prisma studio");
++  await prisma.$disconnect();
++}
++
++main().catch(async (err) => {
++  console.error("\nMigration failed:", err.message);
++  process.exit(1);
++});
+diff --git a/src/app/api/bookings/[id]/checkin/route.ts b/src/app/api/bookings/[id]/checkin/route.ts
+index a10336f..d8446a1 100644
+--- a/src/app/api/bookings/[id]/checkin/route.ts
++++ b/src/app/api/bookings/[id]/checkin/route.ts
+@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
+ import { prisma } from "@/lib/prisma";
+ import { getSession } from "@/lib/session";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ 
+ export async function POST(_: Request, { params }: { params: Promise<{ id: string }> }) {
+   const session = await getSession();
+@@ -32,16 +32,7 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
+     data: { status: "CHECKED_IN", checkInDate: new Date() },
+   });
+ 
+-  await prisma.room.update({
+-    where: { id: booking.roomId },
+-    data: {
+-      status: deriveRoomStatus({
+-        cleaningStatus: booking.room.cleaningStatus,
+-        maintenanceStatus: booking.room.maintenanceStatus,
+-        hasActiveBooking: true,
+-      }),
+-    },
+-  });
++  await syncRoomStatus(booking.roomId);
+ 
+   await createNotification({
+     type: "CHECK_IN",
+diff --git a/src/app/api/bookings/[id]/checkout/route.ts b/src/app/api/bookings/[id]/checkout/route.ts
+index e31b209..50430c7 100644
+--- a/src/app/api/bookings/[id]/checkout/route.ts
++++ b/src/app/api/bookings/[id]/checkout/route.ts
+@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
+ import { prisma } from "@/lib/prisma";
+ import { getSession } from "@/lib/session";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ 
+ export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+   const session = await getSession();
+@@ -35,15 +35,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
+ 
+   await prisma.room.update({
+     where: { id: booking.roomId },
+-    data: {
+-      cleaningStatus: "CLEAN",
+-      status: deriveRoomStatus({
+-        cleaningStatus: "CLEAN",
+-        maintenanceStatus: booking.room.maintenanceStatus,
+-        hasActiveBooking: false,
+-      }),
+-    },
++    data: { cleaningStatus: "CLEAN" },
+   });
++  // Recompute from live bookings so a room that still holds an upcoming
++  // reservation goes back to RESERVED instead of falsely showing AVAILABLE.
++  await syncRoomStatus(booking.roomId);
+ 
+   await createNotification({
+     type: "CHECK_OUT",
+diff --git a/src/app/api/bookings/[id]/delay-arrival/route.ts b/src/app/api/bookings/[id]/delay-arrival/route.ts
+index e605c14..f101335 100644
+--- a/src/app/api/bookings/[id]/delay-arrival/route.ts
++++ b/src/app/api/bookings/[id]/delay-arrival/route.ts
+@@ -21,11 +21,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+   }
+ 
+   const [hours, minutes] = (body.newTime as string).split(":").map(Number);
+-  const newCheckInDate = new Date();
++
++  // Keep the booking on its own arrival day — only the time of day moves.
++  // Building the date from `new Date()` used to drag a reservation made for a
++  // future date back to today, silently destroying the booking.
++  const now = new Date();
++  const base = booking.checkInDate > now ? new Date(booking.checkInDate) : now;
++  const newCheckInDate = new Date(base);
+   newCheckInDate.setHours(hours, minutes, 0, 0);
+ 
+-  // If the time has already passed today, push to tomorrow
+-  if (newCheckInDate <= new Date()) {
++  // Only roll over to the next day when the guest is delaying an arrival that
++  // was due today and the chosen time has already passed.
++  if (newCheckInDate <= now) {
+     newCheckInDate.setDate(newCheckInDate.getDate() + 1);
+   }
+ 
+diff --git a/src/app/api/bookings/[id]/payment/route.ts b/src/app/api/bookings/[id]/payment/route.ts
+index fb90555..c12dc2f 100644
+--- a/src/app/api/bookings/[id]/payment/route.ts
++++ b/src/app/api/bookings/[id]/payment/route.ts
+@@ -28,6 +28,28 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+ 
+   const outstanding = Number(booking.totalAmount) - Number(booking.amountPaid);
+ 
++  // Nothing left to collect (e.g. an over-payment was already recorded): mark
++  // it paid but don't write a zero/negative payment row, which would corrupt
++  // the revenue and profit totals.
++  if (outstanding <= 0) {
++    const settled = await prisma.booking.update({
++      where: { id },
++      data: { paymentStatus: "PAID" },
++    });
++    broadcastUpdate("rooms-updated");
++    broadcastUpdate("bookings-updated");
++    broadcastUpdate("dashboard-updated");
++    broadcastUpdate("guests-updated");
++    return NextResponse.json({
++      booking: {
++        id: settled.id,
++        amountPaid: Number(settled.amountPaid),
++        totalAmount: Number(settled.totalAmount),
++        paymentStatus: settled.paymentStatus,
++      },
++    });
++  }
++
+   const [updated] = await prisma.$transaction([
+     prisma.booking.update({
+       where: { id },
+diff --git a/src/app/api/bookings/reservations/route.ts b/src/app/api/bookings/reservations/route.ts
+index 9ceb9dd..fc3099f 100644
+--- a/src/app/api/bookings/reservations/route.ts
++++ b/src/app/api/bookings/reservations/route.ts
+@@ -3,7 +3,7 @@ import { z } from "zod";
+ import { prisma } from "@/lib/prisma";
+ import { getSession, destroySession } from "@/lib/session";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ import { toDecimalNumber } from "@/lib/format";
+ import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
+ 
+@@ -146,20 +146,7 @@ export async function POST(request: Request) {
+         include: { guest: true, room: true },
+       });
+ 
+-      const hasCheckedIn = await tx.booking.findFirst({
+-        where: { roomId: room.id, status: "CHECKED_IN" },
+-        select: { id: true },
+-      });
+-      await tx.room.update({
+-        where: { id: room.id },
+-        data: {
+-          status: deriveRoomStatus({
+-            maintenanceStatus: room.maintenanceStatus,
+-            hasActiveBooking: !!hasCheckedIn,
+-            hasReservedBooking: true,
+-          }),
+-        },
+-      });
++      await syncRoomStatus(room.id, tx);
+ 
+       return newBooking;
+     });
+diff --git a/src/app/api/bookings/route.ts b/src/app/api/bookings/route.ts
+index a35aa5e..7b97a3c 100644
+--- a/src/app/api/bookings/route.ts
++++ b/src/app/api/bookings/route.ts
+@@ -3,7 +3,7 @@ import { z } from "zod";
+ import { prisma } from "@/lib/prisma";
+ import { getSession, destroySession } from "@/lib/session";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ import { toDecimalNumber } from "@/lib/format";
+ import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
+ 
+@@ -108,7 +108,23 @@ export async function POST(request: Request) {
+     const result = await prisma.$transaction(async (tx) => {
+       const room = await tx.room.findUnique({ where: { id: data.roomId } });
+       if (!room) throw Object.assign(new Error("Room not found"), { status: 404 });
+-      if (room.status !== "AVAILABLE") throw Object.assign(new Error("Room is no longer available"), { status: 409 });
++      if (room.maintenanceStatus === "UNDER_MAINTENANCE") {
++        throw Object.assign(new Error("Room is under maintenance"), { status: 409 });
++      }
++
++      // Check the actual stay dates rather than the room's current status flag:
++      // a reservation starting next month must not block tonight's walk-in.
++      const overlapping = await tx.booking.findFirst({
++        where: {
++          roomId: room.id,
++          status: { in: ["CHECKED_IN", "RESERVED"] },
++          checkInDate: { lt: expectedCheckOut },
++          expectedCheckOut: { gt: checkInDate },
++        },
++      });
++      if (overlapping) {
++        throw Object.assign(new Error("Room is already booked for these dates"), { status: 409 });
++      }
+ 
+       const newBooking = await tx.booking.create({
+         data: {
+@@ -140,15 +156,7 @@ export async function POST(request: Request) {
+         include: { guest: true, room: true },
+       });
+ 
+-      await tx.room.update({
+-        where: { id: room.id },
+-        data: {
+-          status: deriveRoomStatus({
+-            maintenanceStatus: room.maintenanceStatus,
+-            hasActiveBooking: true,
+-          }),
+-        },
+-      });
++      await syncRoomStatus(room.id, tx);
+ 
+       return newBooking;
+     });
+diff --git a/src/app/api/guest/service-requests/[id]/route.ts b/src/app/api/guest/service-requests/[id]/route.ts
+index b5e7afc..d6b34e5 100644
+--- a/src/app/api/guest/service-requests/[id]/route.ts
++++ b/src/app/api/guest/service-requests/[id]/route.ts
+@@ -6,8 +6,11 @@ import { SERVICE_REQUEST_TYPE_LABELS } from "@/lib/constants";
+ import type { ServiceRequestType } from "@/lib/types";
+ 
+ const schema = z.object({
++  // Proves the rater is the guest in that room. Without it any visitor could
++  // rate (and spam notifications for) arbitrary request IDs.
++  roomToken: z.string().min(1, "Missing room token"),
+   rating: z.coerce.number().int().min(1).max(5),
+-  ratingComment: z.string().optional(),
++  ratingComment: z.string().max(500).optional(),
+ });
+ 
+ export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+@@ -22,6 +25,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+   if (!existing) {
+     return NextResponse.json({ error: "Request not found" }, { status: 404 });
+   }
++  if (existing.room.qrToken !== parsed.data.roomToken) {
++    return NextResponse.json({ error: "Request not found" }, { status: 404 });
++  }
+   if (existing.status !== "COMPLETED") {
+     return NextResponse.json({ error: "Request is not completed yet" }, { status: 400 });
+   }
+diff --git a/src/app/api/guest/service-requests/route.ts b/src/app/api/guest/service-requests/route.ts
+index 7766227..79e3fdf 100644
+--- a/src/app/api/guest/service-requests/route.ts
++++ b/src/app/api/guest/service-requests/route.ts
+@@ -38,7 +38,15 @@ export async function POST(request: Request) {
+ 
+   let photoUrl: string | undefined;
+   if (photo instanceof File && photo.size > 0) {
+-    photoUrl = await saveUploadedFile(photo, "service-requests");
++    try {
++      photoUrl = await saveUploadedFile(photo, "service-requests");
++    } catch (err) {
++      const e = err as { message?: string; status?: number };
++      return NextResponse.json(
++        { error: e?.message ?? "Could not upload the photo" },
++        { status: e?.status ?? 400 },
++      );
++    }
+   }
+ 
+   const serviceRequest = await prisma.serviceRequest.create({
+@@ -69,13 +77,30 @@ export async function GET(request: Request) {
+     return NextResponse.json({ error: "Missing room token" }, { status: 400 });
+   }
+ 
+-  const room = await prisma.room.findUnique({ where: { qrToken: roomToken } });
++  const room = await prisma.room.findUnique({
++    where: { qrToken: roomToken },
++    include: {
++      bookings: {
++        where: { status: "CHECKED_IN" },
++        orderBy: { checkInDate: "desc" },
++        take: 1,
++        select: { checkInDate: true },
++      },
++    },
++  });
+   if (!room) {
+     return NextResponse.json({ error: "Room not found" }, { status: 404 });
+   }
+ 
++  // Only expose requests raised during the current stay — otherwise the next
++  // occupant of the room can read the previous guest's request history.
++  const currentStayStart = room.bookings[0]?.checkInDate;
++  if (!currentStayStart) {
++    return NextResponse.json({ requests: [] });
++  }
++
+   const requests = await prisma.serviceRequest.findMany({
+-    where: { roomId: room.id },
++    where: { roomId: room.id, createdAt: { gte: currentStayStart } },
+     orderBy: { createdAt: "desc" },
+     take: 10,
+     select: {
+diff --git a/src/app/api/qr-settings/route.ts b/src/app/api/qr-settings/route.ts
+index 3362ec3..07a51ee 100644
+--- a/src/app/api/qr-settings/route.ts
++++ b/src/app/api/qr-settings/route.ts
+@@ -1,11 +1,17 @@
+ import { NextResponse } from "next/server";
+ import { readFileSync, writeFileSync, existsSync } from "fs";
+ import { join } from "path";
++import { getSession } from "@/lib/session";
+ 
+ const TUNNEL_URL_FILE = join(process.cwd(), ".tunnel-url");
+ const ENV_PATH = join(process.cwd(), ".env");
+ 
+ export async function GET() {
++  const session = await getSession();
++  if (!session) {
++    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
++  }
++
+   // Read live tunnel file first, then env var
+   try {
+     if (existsSync(TUNNEL_URL_FILE)) {
+@@ -17,28 +23,49 @@ export async function GET() {
+ }
+ 
+ export async function POST(request: Request) {
+-  const body = await request.json();
+-  const url: string = (body.url ?? "").trim().replace(/\/$/, "");
++  // Anyone who can set this URL controls where every room QR code points, so
++  // restrict it to managers and owners. It used to be completely unauthenticated.
++  const session = await getSession();
++  if (!session || (session.role !== "OWNER" && session.role !== "MANAGER")) {
++    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
++  }
++
++  const body = await request.json().catch(() => ({}));
++  const url: string = (body?.url ?? "").trim().replace(/\/$/, "");
+ 
+   if (!url) {
+     return NextResponse.json({ error: "URL is required" }, { status: 400 });
+   }
+ 
++  let parsedUrl: URL;
+   try {
+-    new URL(url);
++    parsedUrl = new URL(url);
+   } catch {
+     return NextResponse.json({ error: "Invalid URL" }, { status: 400 });
+   }
++  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
++    return NextResponse.json({ error: "URL must start with http:// or https://" }, { status: 400 });
++  }
+ 
+-  // Write to .tunnel-url (read by QR page on every load)
+-  writeFileSync(TUNNEL_URL_FILE, url, "utf8");
++  try {
++    // Write to .tunnel-url (read by QR page on every load)
++    writeFileSync(TUNNEL_URL_FILE, url, "utf8");
++
++    // Also persist to .env and process.env as backup. On a read-only or
++    // serverless filesystem (Vercel) this throws — the tunnel URL simply
++    // isn't persistable there, so report it instead of returning a 500.
++    let content = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
++    const regex = /^APP_BASE_URL=.*$/m;
++    const newLine = `APP_BASE_URL="${url}"`;
++    content = regex.test(content) ? content.replace(regex, newLine) : `${content}\n${newLine}\n`;
++    writeFileSync(ENV_PATH, content);
++  } catch {
++    return NextResponse.json(
++      { error: "Could not save the URL on this server (read-only filesystem). Set APP_BASE_URL in your environment instead." },
++      { status: 500 },
++    );
++  }
+ 
+-  // Also persist to .env and process.env as backup
+-  let content = readFileSync(ENV_PATH, "utf8");
+-  const regex = /^APP_BASE_URL=.*$/m;
+-  const newLine = `APP_BASE_URL="${url}"`;
+-  content = regex.test(content) ? content.replace(regex, newLine) : content + `\n${newLine}\n`;
+-  writeFileSync(ENV_PATH, content);
+   process.env.APP_BASE_URL = url;
+ 
+   return NextResponse.json({ success: true, url });
+diff --git a/src/app/api/rooms/[id]/route.ts b/src/app/api/rooms/[id]/route.ts
+index ee923e8..74672ac 100644
+--- a/src/app/api/rooms/[id]/route.ts
++++ b/src/app/api/rooms/[id]/route.ts
+@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
+ import { z } from "zod";
+ import { prisma } from "@/lib/prisma";
+ import { getSession } from "@/lib/session";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+ 
+ const schema = z.object({
+@@ -44,20 +44,16 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
+     );
+   }
+ 
+-  const hasReserved = room.bookings.some((b) => b.status === "RESERVED");
+   const cleaningStatus = parsed.data.cleaningStatus ?? room.cleaningStatus;
+   const maintenanceStatus = parsed.data.maintenanceStatus ?? room.maintenanceStatus;
+-  const status = deriveRoomStatus({
+-    cleaningStatus,
+-    maintenanceStatus,
+-    hasActiveBooking: false,
+-    hasReservedBooking: hasReserved,
+-  });
+ 
+-  const updated = await prisma.room.update({
++  await prisma.room.update({
+     where: { id },
+-    data: { cleaningStatus, maintenanceStatus, status },
++    data: { cleaningStatus, maintenanceStatus },
+   });
++  // Derive the status from live bookings so clearing maintenance restores the
++  // correct AVAILABLE / RESERVED / OCCUPIED value.
++  const updated = (await syncRoomStatus(id)) ?? (await prisma.room.findUnique({ where: { id } }));
+ 
+   if (maintenanceStatus === "NEEDS_MAINTENANCE" && room.maintenanceStatus !== "NEEDS_MAINTENANCE") {
+     await createNotification({
+diff --git a/src/components/checkin/checkin-form.tsx b/src/components/checkin/checkin-form.tsx
+index c19b160..77b3501 100644
+--- a/src/components/checkin/checkin-form.tsx
++++ b/src/components/checkin/checkin-form.tsx
+@@ -281,7 +281,6 @@ export function CheckInForm({ rooms }: { rooms: AvailableRoom[] }) {
+     const totalAmount = result.reduce((sum, r) => sum + r.booking.totalAmount, 0);
+     const amountPaid = result.reduce((sum, r) => sum + r.booking.amountPaid, 0);
+     const roomNumbers = result.map((r) => r.room.number).join(", ");
+-    const floors = Array.from(new Set(result.map((r) => r.room.floor))).join(", ");
+     const first = result[0];
+     const greetingMsg = whatsappTemplates.checkInGreeting({
+       title: first.guest.title ?? watch("title") ?? "Mr.",
+diff --git a/src/components/dashboard/mobile-nav.tsx b/src/components/dashboard/mobile-nav.tsx
+index 96d219d..24a651e 100644
+--- a/src/components/dashboard/mobile-nav.tsx
++++ b/src/components/dashboard/mobile-nav.tsx
+@@ -1,11 +1,10 @@
+ "use client";
+ 
+-import { useEffect, useState, useCallback } from "react";
+ import Link from "next/link";
+ import { usePathname } from "next/navigation";
+ import { cn } from "@/lib/utils";
+ import { NAV_ITEMS } from "@/lib/nav";
+-import { useRealtime } from "@/hooks/use-realtime";
++import { usePendingRequestCount } from "@/hooks/use-pending-request-count";
+ import type { Role } from "@/lib/types";
+ 
+ function isActive(pathname: string, href: string) {
+@@ -16,23 +15,7 @@ function isActive(pathname: string, href: string) {
+ export function MobileNav({ role }: { role: Role }) {
+   const pathname = usePathname();
+   const items = NAV_ITEMS.filter((item) => item.mobile && item.roles.includes(role));
+-  const [pendingRequests, setPendingRequests] = useState(0);
+-
+-  const fetchPending = useCallback(async () => {
+-    try {
+-      const res = await fetch("/api/service-requests/pending-count");
+-      if (res.ok) {
+-        const data = await res.json();
+-        setPendingRequests(data.count ?? 0);
+-      }
+-    } catch {}
+-  }, []);
+-
+-  useEffect(() => { fetchPending(); }, [fetchPending]);
+-
+-  useRealtime((kind) => {
+-    if (kind === "requests-updated") fetchPending();
+-  });
++  const pendingRequests = usePendingRequestCount();
+ 
+   return (
+     <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 backdrop-blur md:hidden print:hidden">
+diff --git a/src/components/dashboard/sidebar-nav.tsx b/src/components/dashboard/sidebar-nav.tsx
+index de81bdc..eebf79c 100644
+--- a/src/components/dashboard/sidebar-nav.tsx
++++ b/src/components/dashboard/sidebar-nav.tsx
+@@ -1,12 +1,11 @@
+ "use client";
+ 
+-import { useEffect, useState, useCallback } from "react";
+ import Link from "next/link";
+ import Image from "next/image";
+ import { usePathname } from "next/navigation";
+ import { cn } from "@/lib/utils";
+ import { getNavForRole, type NavItem } from "@/lib/nav";
+-import { useRealtime } from "@/hooks/use-realtime";
++import { usePendingRequestCount } from "@/hooks/use-pending-request-count";
+ import type { Role } from "@/lib/types";
+ 
+ function isActive(pathname: string, href: string) {
+@@ -17,23 +16,7 @@ function isActive(pathname: string, href: string) {
+ export function SidebarNav({ role }: { role: Role }) {
+   const pathname = usePathname();
+   const items = getNavForRole(role);
+-  const [pendingRequests, setPendingRequests] = useState(0);
+-
+-  const fetchPending = useCallback(async () => {
+-    try {
+-      const res = await fetch("/api/service-requests/pending-count");
+-      if (res.ok) {
+-        const data = await res.json();
+-        setPendingRequests(data.count ?? 0);
+-      }
+-    } catch {}
+-  }, []);
+-
+-  useEffect(() => { fetchPending(); }, [fetchPending]);
+-
+-  useRealtime((kind) => {
+-    if (kind === "requests-updated") fetchPending();
+-  });
++  const pendingRequests = usePendingRequestCount();
+ 
+   return (
+     <aside className="hidden w-60 shrink-0 border-r bg-sidebar md:sticky md:top-0 md:flex md:h-screen md:flex-col print:hidden">
+diff --git a/src/components/guest/service-request-page.tsx b/src/components/guest/service-request-page.tsx
+index 505c30f..60bb3a5 100644
+--- a/src/components/guest/service-request-page.tsx
++++ b/src/components/guest/service-request-page.tsx
+@@ -3,7 +3,7 @@
+ import { useEffect, useState } from "react";
+ import Image from "next/image";
+ import { toast } from "sonner";
+-import { Minus, Plus, Star, Loader2, Send, X } from "lucide-react";
++import { Star, Loader2, Send, X } from "lucide-react";
+ import { Button } from "@/components/ui/button";
+ import { Card, CardContent } from "@/components/ui/card";
+ import { Textarea } from "@/components/ui/textarea";
+@@ -184,7 +184,7 @@ export function ServiceRequestPage({
+       const res = await fetch(`/api/guest/service-requests/${requestId}`, {
+         method: "PATCH",
+         headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ rating }),
++        body: JSON.stringify({ rating, roomToken }),
+       });
+       if (!res.ok) { toast.error("Could not submit rating"); return; }
+       toast.success("Thanks for your feedback!");
+diff --git a/src/components/rooms/room-card.tsx b/src/components/rooms/room-card.tsx
+index 68149ad..909ca71 100644
+--- a/src/components/rooms/room-card.tsx
++++ b/src/components/rooms/room-card.tsx
+@@ -49,9 +49,6 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
+   const [checkOutDone, setCheckOutDone] = useState<{ guestName: string; mobile: string; time: string } | null>(null);
+   const colors = ROOM_STATUS_COLORS[room.status];
+   const paymentDue = room.currentBooking && room.currentBooking.paymentStatus !== "PAID";
+-  const pendingAmount = room.currentBooking
+-    ? room.currentBooking.totalAmount - room.currentBooking.amountPaid
+-    : 0;
+ 
+   async function handleToggleMaintenance() {
+     const goingToMaintenance = room.status !== "MAINTENANCE";
+diff --git a/src/hooks/use-pending-request-count.ts b/src/hooks/use-pending-request-count.ts
+new file mode 100644
+index 0000000..c183e97
+--- /dev/null
++++ b/src/hooks/use-pending-request-count.ts
+@@ -0,0 +1,48 @@
++"use client";
++
++import { useCallback, useEffect, useState } from "react";
++import { useRealtime } from "@/hooks/use-realtime";
++
++/**
++ * Live count of pending service requests, shared by the sidebar and the
++ * mobile tab bar so the badge can't disagree between the two.
++ *
++ * The fetch is started from inside the effect (rather than calling a
++ * setState-ing callback synchronously in the effect body) and stale responses
++ * are discarded, which avoids the cascading re-render React warns about.
++ */
++export function usePendingRequestCount() {
++  const [pendingRequests, setPendingRequests] = useState(0);
++  const [reloadKey, setReloadKey] = useState(0);
++
++  useEffect(() => {
++    let cancelled = false;
++    const controller = new AbortController();
++
++    (async () => {
++      try {
++        const res = await fetch("/api/service-requests/pending-count", {
++          signal: controller.signal,
++        });
++        if (!res.ok || cancelled) return;
++        const data = await res.json();
++        if (!cancelled) setPendingRequests(data.count ?? 0);
++      } catch {
++        // Network hiccup or aborted request — keep the previous count.
++      }
++    })();
++
++    return () => {
++      cancelled = true;
++      controller.abort();
++    };
++  }, [reloadKey]);
++
++  const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
++
++  useRealtime((kind) => {
++    if (kind === "requests-updated") refresh();
++  });
++
++  return pendingRequests;
++}
+diff --git a/src/lib/booking-automation.ts b/src/lib/booking-automation.ts
+index 10e8f0f..feb3991 100644
+--- a/src/lib/booking-automation.ts
++++ b/src/lib/booking-automation.ts
+@@ -1,6 +1,6 @@
+ import "server-only";
+ import { prisma } from "@/lib/prisma";
+-import { deriveRoomStatus } from "@/lib/rooms";
++import { syncRoomStatus } from "@/lib/rooms";
+ import { createNotification, broadcastUpdate } from "@/lib/notifications";
+ import { toDecimalNumber } from "@/lib/format";
+ 
+@@ -40,14 +40,9 @@ export async function processAutomaticBookingTransitions() {
+ 
+     await prisma.room.update({
+       where: { id: booking.roomId },
+-      data: {
+-        cleaningStatus: "CLEAN",
+-        status: deriveRoomStatus({
+-          maintenanceStatus: booking.room.maintenanceStatus,
+-          hasActiveBooking: false,
+-        }),
+-      },
++      data: { cleaningStatus: "CLEAN" },
+     });
++    await syncRoomStatus(booking.roomId);
+ 
+     await createNotification({
+       type: "CHECK_OUT",
+@@ -87,7 +82,19 @@ export async function processAutomaticBookingTransitions() {
+     paymentReminders++;
+   }
+ 
+-  if (checkedOut > 0 || paymentReminders > 0) {
++  // Reservations become "imminent" purely with the passage of time, so refresh
++  // the affected rooms on each sweep — otherwise a room booked for tomorrow
++  // would keep showing AVAILABLE until someone edited it by hand.
++  const roomsWithReservations = await prisma.booking.findMany({
++    where: { status: "RESERVED", expectedCheckOut: { gt: now } },
++    select: { roomId: true },
++    distinct: ["roomId"],
++  });
++  for (const { roomId } of roomsWithReservations) {
++    await syncRoomStatus(roomId);
++  }
++
++  if (checkedOut > 0 || paymentReminders > 0 || roomsWithReservations.length > 0) {
+     broadcastUpdate("rooms-updated");
+     broadcastUpdate("bookings-updated");
+     broadcastUpdate("dashboard-updated");
+diff --git a/src/lib/firebase-admin.ts b/src/lib/firebase-admin.ts
+index c3e12b8..4660d24 100644
+--- a/src/lib/firebase-admin.ts
++++ b/src/lib/firebase-admin.ts
+@@ -6,15 +6,23 @@ import { prisma } from "@/lib/prisma";
+ type Messaging = import("firebase-admin/messaging").Messaging;
+ 
+ let messaging: Messaging | null = null;
++let messagingInitFailed = false;
+ 
+-function getMessaging(): Messaging | null {
++async function getMessaging(): Promise<Messaging | null> {
+   if (messaging) return messaging;
+-  try {
+-    const { initializeApp, getApps, cert } = require("firebase-admin/app") as typeof import("firebase-admin/app");
+-    const { getMessaging: _getMessaging } = require("firebase-admin/messaging") as typeof import("firebase-admin/messaging");
++  // Don't retry (and re-read the key file) on every notification once we know
++  // Firebase isn't configured on this deployment.
++  if (messagingInitFailed) return null;
+ 
++  try {
+     const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+-    if (!serviceAccountPath) return null;
++    if (!serviceAccountPath) {
++      messagingInitFailed = true;
++      return null;
++    }
++
++    const { initializeApp, getApps, cert } = await import("firebase-admin/app");
++    const { getMessaging: _getMessaging } = await import("firebase-admin/messaging");
+ 
+     const serviceAccount = JSON.parse(
+       readFileSync(path.resolve(process.cwd(), serviceAccountPath), "utf-8"),
+@@ -27,6 +35,7 @@ function getMessaging(): Messaging | null {
+     messaging = _getMessaging(app);
+     return messaging;
+   } catch {
++    messagingInitFailed = true;
+     return null;
+   }
+ }
+@@ -44,7 +53,7 @@ export async function pushNotificationToCloud(payload: {
+   body: string;
+   link?: string;
+ }) {
+-  const m = getMessaging();
++  const m = await getMessaging();
+   if (!m) return;
+ 
+   const rows = await prisma.deviceToken.findMany({ select: { token: true } });
+diff --git a/src/lib/rooms.ts b/src/lib/rooms.ts
+index ef10e09..ed55260 100644
+--- a/src/lib/rooms.ts
++++ b/src/lib/rooms.ts
+@@ -1,6 +1,10 @@
++import { Prisma } from "@prisma/client";
+ import { prisma } from "@/lib/prisma";
+ import { toDecimalNumber } from "@/lib/format";
+-import type { CleaningStatus, MaintenanceStatus, RoomStatus } from "@/lib/types";
++import type { RoomStatus } from "@/lib/types";
++
++/** Accepts either the shared client or a transaction client. */
++type Db = Prisma.TransactionClient | typeof prisma;
+ 
+ export async function getRoomsWithCurrentBooking() {
+   const rooms = await prisma.room.findMany({
+@@ -40,20 +44,28 @@ export async function getRoomsWithCurrentBooking() {
+ 
+ export type RoomWithCurrentBooking = Awaited<ReturnType<typeof getRoomsWithCurrentBooking>>[number];
+ 
+-export async function getAvailableRooms() {
+-  const rooms = await prisma.room.findMany({
+-    where: { status: "AVAILABLE" },
+-    orderBy: [{ floor: "asc" }, { number: "asc" }],
+-  });
+-
+-  return rooms.map((room) => ({
+-    ...room,
+-    basePrice: toDecimalNumber(room.basePrice),
+-  }));
++/**
++ * Rooms a walk-in guest can be checked into right now.
++ *
++ * A room is bookable tonight as long as nothing overlaps the stay that is
++ * about to start — a reservation for a future date must NOT block it. Using
++ * the room's current-moment `status` here wrongly hid rooms that merely had
++ * an advance booking weeks away.
++ */
++export async function getAvailableRooms(until?: Date) {
++  const now = new Date();
++  const end = until ?? endOfToday(now);
++  return getAvailableRoomsForRange(now, end > now ? end : new Date(now.getTime() + 60 * 60 * 1000));
+ }
+ 
+ export type AvailableRoom = Awaited<ReturnType<typeof getAvailableRooms>>[number];
+ 
++function endOfToday(from: Date) {
++  const d = new Date(from);
++  d.setHours(23, 59, 59, 999);
++  return d;
++}
++
+ /**
+  * Rooms with no CHECKED_IN or RESERVED booking overlapping the given date
+  * range, and not currently under maintenance. Used to populate room choices
+@@ -97,3 +109,52 @@ export function deriveRoomStatus({
+   if (hasReservedBooking) return "RESERVED";
+   return "AVAILABLE";
+ }
++
++/** How soon a future reservation starts before the room is flagged RESERVED. */
++const RESERVED_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
++
++/**
++ * Recomputes and persists a room's status from the bookings that actually
++ * exist, instead of trusting the caller to pass the right flags.
++ *
++ * Every mutation that can change occupancy (check-in, check-out, new booking,
++ * new reservation, maintenance toggle) should call this so the grid, the
++ * check-in room list and the DB can never drift apart. Previously each route
++ * hand-rolled its own flags, which is how a room could stay "AVAILABLE" while
++ * holding a reservation, or stay "RESERVED" months before the guest arrives.
++ */
++export async function syncRoomStatus(roomId: string, db: Db = prisma) {
++  const now = new Date();
++
++  const room = await db.room.findUnique({
++    where: { id: roomId },
++    select: { id: true, maintenanceStatus: true },
++  });
++  if (!room) return null;
++
++  const [activeBooking, upcomingReservation] = await Promise.all([
++    db.booking.findFirst({
++      where: { roomId, status: "CHECKED_IN" },
++      select: { id: true },
++    }),
++    db.booking.findFirst({
++      where: {
++        roomId,
++        status: "RESERVED",
++        // Only a reservation that is imminent (or already due) marks the room
++        // as RESERVED — a booking three weeks out leaves the room sellable.
++        checkInDate: { lte: new Date(now.getTime() + RESERVED_LOOKAHEAD_MS) },
++        expectedCheckOut: { gt: now },
++      },
++      select: { id: true },
++    }),
++  ]);
++
++  const status = deriveRoomStatus({
++    maintenanceStatus: room.maintenanceStatus,
++    hasActiveBooking: !!activeBooking,
++    hasReservedBooking: !!upcomingReservation,
++  });
++
++  return db.room.update({ where: { id: roomId }, data: { status } });
++}
+diff --git a/src/lib/storage.ts b/src/lib/storage.ts
+index d433be5..f33518a 100644
+--- a/src/lib/storage.ts
++++ b/src/lib/storage.ts
+@@ -10,14 +10,32 @@ const UPLOAD_ROOT = path.join(process.cwd(), "public", "uploads");
+  * Swap this implementation for an S3/Cloudinary client to move to cloud storage —
+  * callers only depend on the returned public URL.
+  */
++const MAX_UPLOAD_BYTES = 8 * 1024 * 1024; // 8 MB
++const ALLOWED_MIME_TYPES = new Set([
++  "image/jpeg",
++  "image/png",
++  "image/webp",
++  "application/pdf",
++]);
++
+ export async function saveUploadedFile(
+   file: File,
+   folder: "id-proofs" | "service-requests",
+ ): Promise<string> {
++  if (file.size > MAX_UPLOAD_BYTES) {
++    throw Object.assign(new Error("File is too large (max 8 MB)"), { status: 413 });
++  }
++  if (!ALLOWED_MIME_TYPES.has(file.type)) {
++    throw Object.assign(new Error("Only JPG, PNG, WebP or PDF files are allowed"), { status: 415 });
++  }
++
+   const bytes = await file.arrayBuffer();
+   const buffer = Buffer.from(bytes);
+ 
+-  const ext = path.extname(file.name) || guessExtension(file.type);
++  // Derive the extension from the validated MIME type only. Trusting
++  // file.name allowed a caller to smuggle in names like "../../evil.html"
++  // and control the written path.
++  const ext = guessExtension(file.type);
+   const filename = `${randomUUID()}${ext}`;
+   const dir = path.join(UPLOAD_ROOT, folder);
+   await mkdir(dir, { recursive: true });
+diff --git a/src/proxy.ts b/src/proxy.ts
+index 3ee778c..e86d2b4 100644
+--- a/src/proxy.ts
++++ b/src/proxy.ts
+@@ -32,7 +32,12 @@ export const config = {
+     /*
+      * Protect everything except: login page, guest-facing QR pages and APIs,
+      * auth API, uploaded files, and Next.js internals.
++     *
++     * The alternatives are anchored with a trailing `/` or end-of-string so a
++     * prefix match can't be abused: without it, `/guests` and
++     * `/api/guests/lookup` matched the `guest` exclusion and skipped auth
++     * entirely, exposing the whole guest register.
+      */
+-    "/((?!login|guest|api/auth|api/guest|_next/static|_next/image|uploads|favicon.ico|logo.jpeg).*)",
++    "/((?!login$|guest/|api/auth/|api/guest/|_next/static/|_next/image|uploads/|favicon.ico$|logo.jpeg$).*)",
+   ],
+ };
+-- 
+2.47.3
+
