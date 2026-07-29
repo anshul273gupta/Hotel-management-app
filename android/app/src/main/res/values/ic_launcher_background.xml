@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Matches the off-white field of the Agrawal Inn logo so the adaptive
+         icon blends with the artwork instead of showing a white halo. -->
+    <color name="ic_launcher_background">#ECEBE6</color>
 </resources>
