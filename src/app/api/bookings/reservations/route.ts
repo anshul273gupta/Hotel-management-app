@@ -11,7 +11,13 @@ const schema = z
   .object({
     guestName: z.string().min(1, "Guest name is required"),
     title: z.enum(["Mr.", "Mrs.", "Ms.", "Dr.", "Master"]).default("Mr."),
-    mobile: z.string().regex(/^[6-9]\d{9}$/, "Enter a valid Indian mobile number"),
+    // Optional: some walk-in guests decline to give a number. Blank is
+    // accepted, but anything entered must still be a valid Indian mobile.
+    mobile: z
+      .string()
+      .optional()
+      .default("")
+      .refine((v) => v === "" || /^[6-9]\d{9}$/.test(v), "Enter a valid Indian mobile number"),
     address: z.string().min(1, "Address is required"),
     idProofType: z.string().optional().default(""),
     idProofNumber: z.string().optional().default(""),
@@ -76,27 +82,40 @@ export async function POST(request: Request) {
   const amountPaid = data.advanceAmount;
   const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
 
-  // Upsert guest first (safe outside transaction)
-  const guest = await prisma.guest.upsert({
-    where: { mobile: data.mobile },
-    create: {
-      title: data.title,
-      name: data.guestName,
-      mobile: data.mobile,
-      address: data.address || undefined,
-      idProofType: data.idProofType || undefined,
-      idProofNumber: data.idProofNumber || undefined,
-      specialRequests: data.specialRequests || undefined,
-    },
-    update: {
-      title: data.title,
-      name: data.guestName,
-      ...(data.idProofType ? { idProofType: data.idProofType } : {}),
-      ...(data.idProofNumber ? { idProofNumber: data.idProofNumber } : {}),
-      ...(data.address ? { address: data.address } : {}),
-      ...(data.specialRequests ? { specialRequests: data.specialRequests } : {}),
-    },
-  });
+  // Match a returning guest by mobile number. Without one there's nothing to
+  // match on, so a fresh guest record is created for this stay instead.
+  const guest = data.mobile
+    ? await prisma.guest.upsert({
+        where: { mobile: data.mobile },
+        create: {
+          title: data.title,
+          name: data.guestName,
+          mobile: data.mobile,
+          address: data.address || undefined,
+          idProofType: data.idProofType || undefined,
+          idProofNumber: data.idProofNumber || undefined,
+          specialRequests: data.specialRequests || undefined,
+        },
+        update: {
+          title: data.title,
+          name: data.guestName,
+          ...(data.idProofType ? { idProofType: data.idProofType } : {}),
+          ...(data.idProofNumber ? { idProofNumber: data.idProofNumber } : {}),
+          ...(data.address ? { address: data.address } : {}),
+          ...(data.specialRequests ? { specialRequests: data.specialRequests } : {}),
+        },
+      })
+    : await prisma.guest.create({
+        data: {
+          title: data.title,
+          name: data.guestName,
+          mobile: null,
+          address: data.address || undefined,
+          idProofType: data.idProofType || undefined,
+          idProofNumber: data.idProofNumber || undefined,
+          specialRequests: data.specialRequests || undefined,
+        },
+      });
 
   // Atomic: overlap check, booking create, room status update
   let booking: Awaited<ReturnType<typeof prisma.booking.create>> & { guest: typeof guest; room: { number: string; floor: number } };

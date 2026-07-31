@@ -266,7 +266,7 @@ function BookingSection({
               Room {b.room.number} · {b.guest.name}
             </p>
             <p className="text-xs text-muted-foreground">
-              {formatDate(b.checkInDate)} → {formatDate(b.expectedCheckOut)} · {b.guest.mobile}
+              {formatDate(b.checkInDate)} → {formatDate(b.expectedCheckOut)}{b.guest.mobile ? ` · ${b.guest.mobile}` : ""}
             </p>
           </div>
           <Badge className={`${PAYMENT_STATUS_COLORS[b.paymentStatus]} border-0`}>

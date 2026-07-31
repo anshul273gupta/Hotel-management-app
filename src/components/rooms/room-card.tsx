@@ -46,7 +46,7 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
   const [togglingMaintenance, setTogglingMaintenance] = useState(false);
-  const [checkOutDone, setCheckOutDone] = useState<{ guestName: string; mobile: string; time: string } | null>(null);
+  const [checkOutDone, setCheckOutDone] = useState<{ guestName: string; mobile: string | null; time: string } | null>(null);
   const colors = ROOM_STATUS_COLORS[room.status];
   const paymentDue = room.currentBooking && room.currentBooking.paymentStatus !== "PAID";
 
@@ -197,7 +197,7 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
               return (
                 <div className="space-y-2 text-sm">
                   <p className="flex items-center gap-2">
-                    <Phone className="h-4 w-4 text-muted-foreground" /> {b.guest.mobile}
+                    <Phone className="h-4 w-4 text-muted-foreground" /> {b.guest.mobile ?? "—"}
                   </p>
                   {b.guest.address && (
                     <p className="flex items-center gap-2">
@@ -275,6 +275,8 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="flex flex-col gap-2 pt-2">
+                    {/* Only offer the greeting when we have a number to send it to. */}
+                    {checkOutDone.mobile && (
                     <a
                       href={buildWhatsAppLink(
                         checkOutDone.mobile,
@@ -290,6 +292,7 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
                       <MessageCircle className="h-4 w-4" />
                       Send Check-out Greeting on WhatsApp
                     </a>
+                    )}
                   </div>
                   <DialogFooter>
                     <DialogClose render={<Button variant="outline" />}>Close</DialogClose>

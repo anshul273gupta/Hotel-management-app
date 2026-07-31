@@ -61,7 +61,7 @@ export function GuestHistorySheet({
           <>
             <SheetHeader>
               <SheetTitle>{guest.name}</SheetTitle>
-              <SheetDescription>{guest.mobile}</SheetDescription>
+              <SheetDescription>{guest.mobile ?? "No mobile number on record"}</SheetDescription>
             </SheetHeader>
 
             <div className="space-y-4 overflow-y-auto px-4 pb-4">

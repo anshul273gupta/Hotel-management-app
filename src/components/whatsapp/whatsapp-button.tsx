@@ -10,12 +10,16 @@ export function WhatsAppButton({
   variant = "outline",
   className,
 }: {
-  mobile: string;
+  mobile: string | null;
   message: string;
   label?: string;
   variant?: "default" | "outline" | "secondary" | "ghost";
   className?: string;
 }) {
+  // Mobile numbers are optional, so there's nothing to message for some
+  // guests. Render nothing rather than a link that opens an empty chat.
+  if (!mobile) return null;
+
   const href = buildWhatsAppLink(mobile, message);
 
   return (

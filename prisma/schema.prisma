@@ -55,7 +55,10 @@ model Guest {
   id              String   @id @default(cuid())
   title           String?
   name            String
-  mobile          String   @unique
+  // Optional: walk-in guests sometimes decline to give a number. Postgres
+  // permits many NULLs in a unique column, so guests without one simply don't
+  // participate in the returning-guest match.
+  mobile          String?  @unique
   address         String?
   idProofType     String?
   idProofNumber   String?

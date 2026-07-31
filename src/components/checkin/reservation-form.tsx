@@ -49,7 +49,12 @@ const reservationSchema = z
       .string()
       .min(1, "Guest name is required")
       .regex(/^[A-Za-z\s.'-]+$/, "Name should not contain numbers"),
-    mobile: z.string().regex(/^[6-9]\d{9}$/, "Enter a valid Indian mobile number"),
+    // Optional — leave blank when a guest declines to give a number.
+    mobile: z
+      .string()
+      .optional()
+      .default("")
+      .refine((v) => !v || /^[6-9]\d{9}$/.test(v), "Enter a valid Indian mobile number"),
     address: z.string().min(1, "Address is required"),
     idProofType: z.string().optional().default(""),
     idProofNumber: z.string().optional().default(""),
@@ -395,7 +400,7 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="resMobile">Mobile Number *</Label>
+              <Label htmlFor="resMobile">Mobile Number <span className="text-muted-foreground font-normal">(optional)</span></Label>
               <div className="flex overflow-hidden rounded-md border border-input focus-within:ring-1 focus-within:ring-ring">
                 <span className="flex select-none items-center border-r bg-muted px-3 text-sm font-medium text-muted-foreground">
                   +91

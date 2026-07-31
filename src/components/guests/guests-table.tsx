@@ -56,7 +56,7 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
     const query = search.trim().toLowerCase();
     return guests.filter((guest) => {
       if (query) {
-        const haystack = `${guest.name} ${guest.mobile} ${guest.address ?? ""}`.toLowerCase();
+        const haystack = `${guest.name} ${guest.mobile ?? ""} ${guest.address ?? ""}`.toLowerCase();
         if (!haystack.includes(query)) return false;
       }
       if (fromDate && guest.lastCheckIn) {
@@ -75,7 +75,7 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
   function exportCsv() {
     const rows = filtered.map((guest) => ({
       Name: guest.name,
-      Mobile: guest.mobile,
+      Mobile: guest.mobile ?? "",
       Address: guest.address ?? "",
       "ID Proof Type": guest.idProofType ?? "",
       "ID Proof Number": guest.idProofNumber ?? "",
@@ -162,7 +162,7 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
                   onClick={() => setSelectedId(guest.id)}
                 >
                   <TableCell className="font-medium">{guest.name}</TableCell>
-                  <TableCell>{guest.mobile}</TableCell>
+                  <TableCell>{guest.mobile ?? <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="hidden max-w-48 truncate md:table-cell">
                     {guest.address ?? "—"}
                   </TableCell>
