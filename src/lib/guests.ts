@@ -51,6 +51,7 @@ export async function getGuestsRegister() {
       bookings: guest.bookings.map((booking) => ({
         id: booking.id,
         roomNumber: booking.room.number,
+        numberOfGuests: booking.numberOfGuests,
         checkInDate: booking.checkInDate,
         expectedCheckOut: booking.expectedCheckOut,
         actualCheckOut: booking.actualCheckOut,

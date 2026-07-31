@@ -20,9 +20,56 @@ import {
   PAYMENT_STATUS_COLORS,
   PAYMENT_STATUS_LABELS,
 } from "@/lib/constants";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
 import { HOTEL_NAME, whatsappTemplates } from "@/lib/whatsapp";
 import type { GuestRegisterEntry } from "@/lib/guests";
+
+type StayBooking = GuestRegisterEntry["bookings"][number];
+
+/**
+ * The WhatsApp message that suits a stay at its current stage.
+ *
+ * Auto check-out happens without anyone opening a dialog, so the thank-you
+ * message that the manual check-out flow offers is never shown for those
+ * stays. Surfacing it here means any past guest can still be messaged —
+ * whether they were checked out automatically overnight or the dialog was
+ * closed too quickly.
+ */
+function stayMessage(guestName: string, booking: StayBooking) {
+  switch (booking.status) {
+    case "CHECKED_OUT":
+      return {
+        label: "Send Thank-you",
+        message: whatsappTemplates.checkOutGreeting({
+          guestName,
+          checkOutTime: formatDateTime(booking.actualCheckOut ?? booking.expectedCheckOut),
+        }),
+      };
+    case "CHECKED_IN":
+      return {
+        label: "Send Check-in Greeting",
+        message: whatsappTemplates.checkInGreeting({
+          title: "",
+          guestName,
+          checkInTime: formatDateTime(booking.checkInDate),
+          roomNumber: booking.roomNumber,
+        }),
+      };
+    case "RESERVED":
+      return {
+        label: "Send Booking Confirmation",
+        message: whatsappTemplates.bookingConfirmation({
+          guestName,
+          roomNumber: booking.roomNumber,
+          checkInDate: formatDate(booking.checkInDate),
+          expectedCheckOut: formatDate(booking.expectedCheckOut),
+          numberOfGuests: booking.numberOfGuests,
+        }),
+      };
+    default:
+      return null;
+  }
+}
 
 export function GuestHistorySheet({
   guest,
@@ -140,6 +187,18 @@ export function GuestHistorySheet({
                           Mark as Fully Paid
                         </Button>
                       )}
+                      {(() => {
+                        const stay = stayMessage(guest.name, booking);
+                        if (!stay) return null;
+                        return (
+                          <WhatsAppButton
+                            mobile={guest.mobile}
+                            label={stay.label}
+                            message={stay.message}
+                            className="mt-2 w-full"
+                          />
+                        );
+                      })()}
                     </div>
                   ))
                 )}

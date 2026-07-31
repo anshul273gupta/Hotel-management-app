@@ -80,9 +80,10 @@ export const whatsappTemplates = {
     `Balance Due: Rs. ${params.balanceDue}\n\n` +
     `Thank you for choosing us!`,
 
-  checkInGreeting: (params: { title: string; guestName: string; checkInTime: string; roomNumber: string }) =>
+  checkInGreeting: (params: { title?: string; guestName: string; checkInTime: string; roomNumber: string }) =>
     `*${HOTEL_NAME}*\n\n` +
-    `Welcome, ${params.title} ${params.guestName}!\n\n` +
+    // Title is optional — joining conditionally avoids a double space.
+    `Welcome, ${[params.title, params.guestName].filter(Boolean).join(" ")}!\n\n` +
     `We are delighted to have you stay with us.\n\n` +
     `\u2705 Check-In Time: ${params.checkInTime}\n` +
     `\uD83C\uDFE0 Room Number: ${params.roomNumber}\n\n` +
