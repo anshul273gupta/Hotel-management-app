@@ -2,9 +2,13 @@ import Image from "next/image";
 import { prisma } from "@/lib/prisma";
 import { ServiceRequestPage } from "@/components/guest/service-request-page";
 import { HOTEL_NAME, HOTEL_PHONE } from "@/lib/whatsapp";
+import {
+  isWithinServiceHours,
+  isHousekeepingOpen,
+  nextHousekeepingWindow,
+  SERVICE_HOURS_LABEL,
+} from "@/lib/service-hours";
 
-const SERVICE_START_HOUR = 10;
-const SERVICE_END_HOUR = 21;
 
 const pastelPinkStyle = {
   "--background": "oklch(0.96 0.02 350)",
@@ -79,14 +83,14 @@ export default async function GuestRoomPage({ params }: { params: Promise<{ toke
     );
   }
 
-  // Outside service hours
-  const hour = new Date().getHours();
-  if (hour < SERVICE_START_HOUR || hour >= SERVICE_END_HOUR) {
+  // Outside service hours. Evaluated in the hotel's timezone — the server
+  // runs in UTC, which is 5h30m behind Indore.
+  if (!isWithinServiceHours()) {
     return (
       <HotelCard
         emoji="🕙"
         heading="Service Hours Are Over"
-        subtext={`Room service requests are accepted between 10:00 AM and 9:00 PM. For urgent needs, please call reception — we are always here for you.`}
+        subtext={`Room service requests are accepted between ${SERVICE_HOURS_LABEL}. For urgent needs, please call reception — we are always here for you.`}
       />
     );
   }
@@ -108,6 +112,8 @@ export default async function GuestRoomPage({ params }: { params: Promise<{ toke
       roomNumber={room.number}
       hotelName={HOTEL_NAME}
       receptionPhone={HOTEL_PHONE}
+      housekeepingOpen={isHousekeepingOpen()}
+      housekeepingNextWindow={nextHousekeepingWindow()}
     />
   );
 }

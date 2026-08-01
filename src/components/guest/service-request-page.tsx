@@ -53,11 +53,16 @@ export function ServiceRequestPage({
   roomNumber,
   hotelName,
   receptionPhone,
+  housekeepingOpen,
+  housekeepingNextWindow,
 }: {
   roomToken: string;
   roomNumber: string;
   hotelName: string;
   receptionPhone: string;
+  /** Housekeeping runs two shifts a day; requests outside them are declined. */
+  housekeepingOpen: boolean;
+  housekeepingNextWindow: string;
 }) {
   const [selectedType, setSelectedType] = useState<ServiceRequestType | null>(null);
   const [description, setDescription] = useState("");
@@ -338,16 +343,39 @@ export function ServiceRequestPage({
         )}
 
         <div className="grid grid-cols-2 gap-3">
-          {REQUEST_TYPES.map((type) => (
-            <button key={type} type="button" onClick={() => openRequest(type)} className="text-left">
-              <Card className="h-full border-primary/10 transition-colors hover:bg-primary/5 active:scale-[0.98]">
-                <CardContent className="flex flex-col items-center gap-2 px-3 py-5 text-center">
-                  <span className="text-3xl">{SERVICE_REQUEST_TYPE_ICONS[type]}</span>
-                  <span className="text-sm font-medium text-foreground">{SERVICE_REQUEST_TYPE_LABELS[type]}</span>
-                </CardContent>
-              </Card>
-            </button>
-          ))}
+          {REQUEST_TYPES.map((type) => {
+            // Housekeeping only runs during its two daily shifts. Show the
+            // tile greyed out with the next window rather than hiding it, so
+            // guests know the service exists and when to come back.
+            const closed = type === "HOUSEKEEPING" && !housekeepingOpen;
+            return (
+              <button
+                key={type}
+                type="button"
+                disabled={closed}
+                onClick={() => openRequest(type)}
+                className="text-left disabled:cursor-not-allowed"
+              >
+                <Card
+                  className={
+                    closed
+                      ? "h-full border-primary/10 opacity-60"
+                      : "h-full border-primary/10 transition-colors hover:bg-primary/5 active:scale-[0.98]"
+                  }
+                >
+                  <CardContent className="flex flex-col items-center gap-2 px-3 py-5 text-center">
+                    <span className="text-3xl">{SERVICE_REQUEST_TYPE_ICONS[type]}</span>
+                    <span className="text-sm font-medium text-foreground">{SERVICE_REQUEST_TYPE_LABELS[type]}</span>
+                    {closed && (
+                      <span className="text-[11px] leading-tight text-muted-foreground">
+                        Available {housekeepingNextWindow}
+                      </span>
+                    )}
+                  </CardContent>
+                </Card>
+              </button>
+            );
+          })}
         </div>
 
         {myRequests.length > 0 && (

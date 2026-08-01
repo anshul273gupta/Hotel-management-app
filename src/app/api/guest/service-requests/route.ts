@@ -3,6 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { saveUploadedFile } from "@/lib/storage";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { SERVICE_REQUEST_TYPE_LABELS } from "@/lib/constants";
+import {
+  isWithinServiceHours,
+  isHousekeepingOpen,
+  nextHousekeepingWindow,
+  SERVICE_HOURS_LABEL,
+} from "@/lib/service-hours";
 import type { ServiceRequestType } from "@/lib/types";
 
 const REQUEST_TYPES = Object.keys(SERVICE_REQUEST_TYPE_LABELS) as ServiceRequestType[];
@@ -23,6 +29,21 @@ export async function POST(request: Request) {
   }
   if (type === "CUSTOM" && (typeof description !== "string" || !description.trim())) {
     return NextResponse.json({ error: "Description is required for custom requests" }, { status: 400 });
+  }
+
+  // Enforce the windows here too — the page hides the options, but the
+  // endpoint is public and a stale tab could still post outside hours.
+  if (!isWithinServiceHours()) {
+    return NextResponse.json(
+      { error: `Requests are accepted between ${SERVICE_HOURS_LABEL}. Please call reception for urgent needs.` },
+      { status: 403 },
+    );
+  }
+  if (type === "HOUSEKEEPING" && !isHousekeepingOpen()) {
+    return NextResponse.json(
+      { error: `Housekeeping is available ${nextHousekeepingWindow()}.` },
+      { status: 403 },
+    );
   }
 
   const room = await prisma.room.findUnique({
