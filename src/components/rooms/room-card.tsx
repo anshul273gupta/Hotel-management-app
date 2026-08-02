@@ -41,6 +41,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/format";
 import { buildWhatsAppLink, whatsappTemplates } from "@/lib/whatsapp";
+import { EditBookingDialog } from "@/components/bookings/edit-booking-dialog";
 import type { RoomWithCurrentBooking } from "@/lib/rooms";
 
 export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
@@ -327,6 +328,32 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
             </DialogContent>
           </Dialog>
         )}
+
+        {/* ── Edit / cancel whichever booking the room holds ── */}
+        {(room.currentBooking ?? room.reservedBooking) && (() => {
+          const b = (room.currentBooking ?? room.reservedBooking)!;
+          return (
+            <EditBookingDialog
+              booking={{
+                id: b.id,
+                status: b.status,
+                numberOfGuests: b.numberOfGuests,
+                roomRate: b.roomRate,
+                totalAmount: b.totalAmount,
+                amountPaid: b.amountPaid,
+                checkInDate: b.checkInDate,
+                expectedCheckOut: b.expectedCheckOut,
+                notes: b.notes,
+                roomNumber: room.number,
+                guest: {
+                  name: b.guest.name,
+                  mobile: b.guest.mobile,
+                  address: b.guest.address,
+                },
+              }}
+            />
+          );
+        })()}
 
         {/* ── Check-in button (RESERVED rooms) ── */}
         {room.reservedBooking && !room.currentBooking && (
