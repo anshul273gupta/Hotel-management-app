@@ -49,7 +49,8 @@ const checkInSchema = z
       .optional()
       .default("")
       .refine((v) => !v || /^[6-9]\d{9}$/.test(v), "Enter a valid Indian mobile number"),
-    address: z.string().min(1, "Address is required"),
+    // Optional — walk-in guests are not always willing to give an address.
+    address: z.string().optional().default(""),
     idProofType: z.string().optional().default(""),
     idProofNumber: z.string().optional().default(""),
     numberOfGuests: z.coerce.number().int().min(1, "At least 1 guest").max(20),
@@ -128,7 +129,14 @@ function splitAmount(total: number, parts: number): number[] {
   return shares;
 }
 
-export function CheckInForm({ rooms }: { rooms: AvailableRoom[] }) {
+export function CheckInForm({
+  rooms,
+  preselectRoomId,
+}: {
+  rooms: AvailableRoom[];
+  /** Room chosen on the Rooms page, pre-filled so staff don't pick it twice. */
+  preselectRoomId?: string;
+}) {
   const router = useRouter();
   const [returningGuest, setReturningGuest] = useState<GuestLookup | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -149,7 +157,10 @@ export function CheckInForm({ rooms }: { rooms: AvailableRoom[] }) {
       numberOfGuests: 1,
       expectedCheckOut: defaultCheckOut(),
       expectedCheckOutTime: "10:00",
-      rooms: [],
+      rooms: (() => {
+        const room = preselectRoomId ? rooms.find((r) => r.id === preselectRoomId) : undefined;
+        return room ? [{ roomId: room.id, roomRate: Number(room.basePrice) }] : [];
+      })(),
       advanceAmount: 0,
       paymentMethod: "CASH",
     },
@@ -431,7 +442,7 @@ export function CheckInForm({ rooms }: { rooms: AvailableRoom[] }) {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="address">Address *</Label>
+              <Label htmlFor="address">Address <span className="text-muted-foreground font-normal">(optional)</span></Label>
               <Input id="address" placeholder="Home / city address" {...register("address")} />
               {errors.address && <p className="text-xs text-destructive">{errors.address.message}</p>}
             </div>

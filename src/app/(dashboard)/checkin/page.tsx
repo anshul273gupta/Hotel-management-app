@@ -5,7 +5,13 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export const dynamic = "force-dynamic";
 
-export default async function CheckInPage() {
+export default async function CheckInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ room?: string; tab?: string }>;
+}) {
+  // The Rooms page links here with ?room=<id> so the room is already chosen.
+  const { room: preselectRoomId } = await searchParams;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today);
@@ -33,7 +39,7 @@ export default async function CheckInPage() {
           <TabsTrigger value="booking">Advance Booking</TabsTrigger>
         </TabsList>
         <TabsContent value="walkin">
-          <CheckInForm rooms={rooms} />
+          <CheckInForm rooms={rooms} preselectRoomId={preselectRoomId} />
         </TabsContent>
         <TabsContent value="booking">
           <ReservationForm initialRooms={reservationRooms} />

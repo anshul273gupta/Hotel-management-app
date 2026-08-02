@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarRange,
@@ -14,6 +15,7 @@ import {
   NotebookText,
   Phone,
   User,
+  UserPlus,
   Wrench,
   CheckCircle,
 } from "lucide-react";
@@ -339,7 +341,7 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
           </Button>
         )}
 
-        {/* ── Maintenance toggle (AVAILABLE or MAINTENANCE rooms only) ── */}
+        {/* ── Free room: occupy it, or bring it back from maintenance ── */}
         {!room.currentBooking && !room.reservedBooking && (
           room.status === "MAINTENANCE" ? (
             <Button
@@ -353,16 +355,29 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
               Mark as Available
             </Button>
           ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full gap-1.5 text-orange-700 border-orange-300 hover:bg-orange-50 dark:text-orange-400 dark:border-orange-700 dark:hover:bg-orange-950/40"
-              onClick={handleToggleMaintenance}
-              disabled={togglingMaintenance}
-            >
-              {togglingMaintenance ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
-              Mark as Maintenance
-            </Button>
+            <div className="flex flex-col gap-1.5">
+              {/* A room only becomes occupied once a guest is checked into it,
+                  so this opens the check-in form with the room pre-selected
+                  rather than flipping a status flag on its own. */}
+              <Button
+                size="sm"
+                className="w-full gap-1.5"
+                render={<Link href={`/checkin?room=${room.id}`} />}
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                Mark Room Occupied
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full gap-1.5 text-muted-foreground hover:text-orange-700 dark:hover:text-orange-400"
+                onClick={handleToggleMaintenance}
+                disabled={togglingMaintenance}
+              >
+                {togglingMaintenance ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wrench className="h-3.5 w-3.5" />}
+                Mark as Maintenance
+              </Button>
+            </div>
           )
         )}
 

@@ -18,7 +18,8 @@ const schema = z
       .optional()
       .default("")
       .refine((v) => v === "" || /^[6-9]\d{9}$/.test(v), "Enter a valid Indian mobile number"),
-    address: z.string().min(1, "Address is required"),
+    // Optional — walk-in guests are not always willing to give an address.
+    address: z.string().optional().default(""),
     idProofType: z.string().optional().default(""),
     idProofNumber: z.string().optional().default(""),
     numberOfGuests: z.coerce.number().int().min(1).max(20),

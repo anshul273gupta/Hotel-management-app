@@ -55,7 +55,8 @@ const reservationSchema = z
       .optional()
       .default("")
       .refine((v) => !v || /^[6-9]\d{9}$/.test(v), "Enter a valid Indian mobile number"),
-    address: z.string().min(1, "Address is required"),
+    // Optional — walk-in guests are not always willing to give an address.
+    address: z.string().optional().default(""),
     idProofType: z.string().optional().default(""),
     idProofNumber: z.string().optional().default(""),
     numberOfGuests: z.coerce.number().int().min(1, "At least 1 guest").max(20),
@@ -419,7 +420,7 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="resAddress">Address *</Label>
+              <Label htmlFor="resAddress">Address <span className="text-muted-foreground font-normal">(optional)</span></Label>
               <Input id="resAddress" placeholder="Home / city address" {...register("address")} />
               {errors.address && <p className="text-xs text-destructive">{errors.address.message}</p>}
             </div>
