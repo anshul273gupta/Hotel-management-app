@@ -6,7 +6,17 @@ import type { RoomStatus } from "@/lib/types";
 /** Accepts either the shared client or a transaction client. */
 type Db = Prisma.TransactionClient | typeof prisma;
 
+/**
+ * How soon a reservation starts before it takes over the room.
+ *
+ * Until an arrival is this close the room stays sellable and the grid keeps
+ * showing it as free — a booking days away shouldn't occupy a card or offer a
+ * "Check In Guest" button, since nobody can arrive yet.
+ */
+const RESERVED_LOOKAHEAD_MS = 12 * 60 * 60 * 1000;
+
 export async function getRoomsWithCurrentBooking() {
+  const now = new Date();
   const rooms = await prisma.room.findMany({
     orderBy: [{ floor: "asc" }, { number: "asc" }],
     include: {
@@ -21,7 +31,17 @@ export async function getRoomsWithCurrentBooking() {
   return rooms.map((room) => {
     const { bookings, ...rest } = room;
     const checkedIn = bookings.find((b) => b.status === "CHECKED_IN") ?? null;
-    const reserved = bookings.find((b) => b.status === "RESERVED") ?? null;
+    // Match the status rule: only an imminent reservation claims the card.
+    const reserved =
+      bookings.find(
+        (b) =>
+          b.status === "RESERVED" &&
+          b.checkInDate.getTime() <= now.getTime() + RESERVED_LOOKAHEAD_MS &&
+          b.expectedCheckOut.getTime() > now.getTime(),
+      ) ?? null;
+    // Anything further out is still worth surfacing, just not as an arrival.
+    const upcoming =
+      bookings.find((b) => b.status === "RESERVED" && b !== reserved) ?? null;
 
     function mapBooking(b: (typeof bookings)[number] | null) {
       if (!b) return null;
@@ -38,6 +58,8 @@ export async function getRoomsWithCurrentBooking() {
       basePrice: toDecimalNumber(rest.basePrice),
       currentBooking: mapBooking(checkedIn),
       reservedBooking: mapBooking(reserved),
+      /** A confirmed booking that hasn't come due yet — shown as a note only. */
+      upcomingBooking: mapBooking(upcoming),
     };
   });
 }
@@ -109,9 +131,6 @@ export function deriveRoomStatus({
   if (hasReservedBooking) return "RESERVED";
   return "AVAILABLE";
 }
-
-/** How soon a future reservation starts before the room is flagged RESERVED. */
-const RESERVED_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Recomputes and persists a room's status from the bookings that actually

@@ -355,6 +355,14 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
           );
         })()}
 
+        {/* ── A booking that hasn't come due yet: a note, not an arrival ── */}
+        {room.upcomingBooking && !room.currentBooking && !room.reservedBooking && (
+          <p className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground">
+            <CalendarRange className="h-3.5 w-3.5 shrink-0" />
+            Booked from {formatDate(room.upcomingBooking.checkInDate)} · {room.upcomingBooking.guest.name}
+          </p>
+        )}
+
         {/* ── Check-in button (RESERVED rooms) ── */}
         {room.reservedBooking && !room.currentBooking && (
           <Button
