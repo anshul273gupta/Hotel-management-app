@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { WhatsAppButton } from "@/components/whatsapp/whatsapp-button";
+import { EditBookingDialog } from "@/components/bookings/edit-booking-dialog";
 import {
   BOOKING_STATUS_LABELS,
   PAYMENT_STATUS_COLORS,
@@ -186,6 +187,30 @@ export function GuestHistorySheet({
                           {payingId === booking.id && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                           Mark as Fully Paid
                         </Button>
+                      )}
+                      {/* Every stay is editable from here — the room grid only
+                          ever shows one booking, so a future or completed one
+                          had no route to it. */}
+                      {booking.status !== "CANCELLED" && (
+                        <EditBookingDialog
+                          booking={{
+                            id: booking.id,
+                            status: booking.status,
+                            numberOfGuests: booking.numberOfGuests,
+                            roomRate: booking.roomRate,
+                            totalAmount: booking.totalAmount,
+                            amountPaid: booking.amountPaid,
+                            checkInDate: booking.checkInDate,
+                            expectedCheckOut: booking.expectedCheckOut,
+                            notes: booking.notes,
+                            roomNumber: booking.roomNumber,
+                            guest: {
+                              name: guest.name,
+                              mobile: guest.mobile,
+                              address: guest.address,
+                            },
+                          }}
+                        />
                       )}
                       {(() => {
                         const stay = stayMessage(guest.name, booking);

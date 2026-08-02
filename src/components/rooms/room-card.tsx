@@ -330,8 +330,8 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
         )}
 
         {/* ── Edit / cancel whichever booking the room holds ── */}
-        {(room.currentBooking ?? room.reservedBooking) && (() => {
-          const b = (room.currentBooking ?? room.reservedBooking)!;
+        {(room.currentBooking ?? room.reservedBooking ?? room.upcomingBooking) && (() => {
+          const b = (room.currentBooking ?? room.reservedBooking ?? room.upcomingBooking)!;
           return (
             <EditBookingDialog
               booking={{

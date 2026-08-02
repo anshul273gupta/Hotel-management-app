@@ -52,6 +52,8 @@ export async function getGuestsRegister() {
         id: booking.id,
         roomNumber: booking.room.number,
         numberOfGuests: booking.numberOfGuests,
+        roomRate: toDecimalNumber(booking.roomRate),
+        notes: booking.notes,
         checkInDate: booking.checkInDate,
         expectedCheckOut: booking.expectedCheckOut,
         actualCheckOut: booking.actualCheckOut,
