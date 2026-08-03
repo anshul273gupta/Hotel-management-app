@@ -104,7 +104,7 @@ export function GuestHistorySheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
+      <SheetContent className="w-full max-w-full sm:max-w-sm">
         {guest && (
           <>
             <SheetHeader>
@@ -113,7 +113,7 @@ export function GuestHistorySheet({
             </SheetHeader>
 
             <div className="space-y-4 overflow-y-auto px-4 pb-4">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
                 <Stat label="Total Visits" value={guest.totalVisits.toString()} />
                 <Stat label="Total Spending" value={formatCurrency(guest.totalSpending)} />
                 <Stat label="Favorite Room" value={guest.favoriteRoom ?? "—"} />
@@ -260,7 +260,9 @@ function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border p-2.5">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="font-display text-lg font-semibold">{value}</p>
+      {/* Long values like a spend total or ID number would otherwise overflow
+          the narrow column on a phone. */}
+      <p className="font-display text-base font-semibold break-words sm:text-lg">{value}</p>
     </div>
   );
 }

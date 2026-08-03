@@ -107,8 +107,10 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative flex-1 min-w-48">
+      {/* Filters stack on a phone; the date range and export sit on one row
+          so the controls stay reachable without horizontal scrolling. */}
+      <div className="space-y-2">
+        <div className="relative">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search by name, mobile, or address"
@@ -117,28 +119,45 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "ALL" | BookingStatus)}>
-          <SelectTrigger className="w-auto min-w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STAY_STATUS_FILTERS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input type="date" className="w-auto" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-        <span className="text-sm text-muted-foreground">to</span>
-        <Input type="date" className="w-auto" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-        <Button variant="outline" className="gap-1.5" onClick={exportCsv}>
-          <Download className="h-4 w-4" />
-          Export CSV
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "ALL" | BookingStatus)}>
+            <SelectTrigger className="w-full sm:w-auto sm:min-w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {STAY_STATUS_FILTERS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex flex-1 items-center gap-2">
+            <Input
+              type="date"
+              aria-label="From date"
+              className="min-w-0 flex-1 sm:w-auto sm:flex-none"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+            <span className="shrink-0 text-sm text-muted-foreground">to</span>
+            <Input
+              type="date"
+              aria-label="To date"
+              className="min-w-0 flex-1 sm:w-auto sm:flex-none"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </div>
+          <Button variant="outline" className="w-full gap-1.5 sm:w-auto" onClick={exportCsv}>
+            <Download className="h-4 w-4" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
-      <div className="rounded-lg border">
+      {/* Eight columns cannot fit a phone, so the table is desktop-only. */}
+      <div className="hidden rounded-lg border md:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -210,6 +229,59 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
             )}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Phone layout: one tappable card per guest, showing only what matters
+          at a glance. The rest is in the detail sheet. */}
+      <div className="space-y-2 md:hidden">
+        {filtered.length === 0 ? (
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            No guests match your search.
+          </p>
+        ) : (
+          filtered.map((guest) => (
+            <button
+              key={guest.id}
+              type="button"
+              onClick={() => setSelectedId(guest.id)}
+              className={`w-full rounded-lg border p-3 text-left transition-colors active:bg-muted/60 ${
+                guest.hasPendingPayment ? "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20" : ""
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{guest.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {guest.mobile ?? "No mobile number"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  {guest.currentStatus && (
+                    <Badge className={`${BOOKING_STATUS_COLORS[guest.currentStatus]} border-0`}>
+                      {BOOKING_STATUS_LABELS[guest.currentStatus]}
+                    </Badge>
+                  )}
+                  {guest.hasPendingPayment && (
+                    <Badge className={`${PAYMENT_STATUS_COLORS.PENDING} border-0`}>
+                      Payment Due
+                    </Badge>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span className="truncate">
+                  {guest.lastCheckIn
+                    ? `${formatDate(guest.lastCheckIn)} → ${formatDate(guest.lastCheckOut!)}`
+                    : "No stays yet"}
+                </span>
+                <span className="shrink-0">
+                  {guest.totalVisits} visit{guest.totalVisits === 1 ? "" : "s"} ·{" "}
+                  {formatCurrency(guest.totalSpending)}
+                </span>
+              </div>
+            </button>
+          ))
+        )}
       </div>
 
       <GuestHistorySheet guest={selected} open={!!selected} onOpenChange={(open) => !open && setSelectedId(null)} />
