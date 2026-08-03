@@ -10,9 +10,11 @@
  *   node scripts/merge-duplicate-guests.js            # report only
  *   node scripts/merge-duplicate-guests.js --apply    # actually merge
  *
- * Only guests with NO mobile number are considered, grouped by identical name
- * (case-insensitive). Guests who gave a phone number are never touched, since
- * two different people can share a name.
+ * Guests are grouped by identical name (case-insensitive). A group is only
+ * merged when at most one of its records has a mobile number — that covers the
+ * same person booked once with a number and once without. If two records share
+ * a name but have different numbers they are treated as different people and
+ * left alone.
  */
 
 const { PrismaClient } = require("@prisma/client");
@@ -36,7 +38,6 @@ async function main() {
   const prisma = new PrismaClient();
 
   const guests = await prisma.guest.findMany({
-    where: { mobile: null },
     include: { _count: { select: { bookings: true } } },
     orderBy: { createdAt: "asc" },
   });
@@ -48,7 +49,12 @@ async function main() {
     groups.get(key).push(g);
   }
 
-  const duplicates = [...groups.entries()].filter(([, list]) => list.length > 1);
+  const duplicates = [...groups.entries()].filter(([, list]) => {
+    if (list.length < 2) return false;
+    // Distinct phone numbers mean distinct people, however alike the names.
+    const numbers = new Set(list.map((g) => g.mobile).filter(Boolean));
+    return numbers.size <= 1;
+  });
 
   if (duplicates.length === 0) {
     console.log("No duplicate guests found.");
@@ -64,8 +70,11 @@ async function main() {
   let removed = 0;
 
   for (const [, list] of duplicates) {
-    // Keep the oldest record; it's the one earlier bookings already point at.
-    const [keep, ...rest] = list;
+    // Prefer the record that carries the phone number; otherwise the oldest,
+    // which is what earlier bookings already point at.
+    const withNumber = list.find((g) => g.mobile);
+    const keep = withNumber ?? list[0];
+    const rest = list.filter((g) => g.id !== keep.id);
     const totalBookings = list.reduce((n, g) => n + g._count.bookings, 0);
     console.log(
       `  ${keep.name}: ${list.length} records, ${totalBookings} booking(s) -> keeping ${keep.id}`,
@@ -84,6 +93,7 @@ async function main() {
       await prisma.guest.update({
         where: { id: keep.id },
         data: {
+          mobile: keep.mobile ?? dup.mobile ?? undefined,
           address: keep.address ?? dup.address ?? undefined,
           idProofType: keep.idProofType ?? dup.idProofType ?? undefined,
           idProofNumber: keep.idProofNumber ?? dup.idProofNumber ?? undefined,

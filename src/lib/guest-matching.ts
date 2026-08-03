@@ -58,15 +58,20 @@ export async function findOrCreateGuest(data: GuestIdentity, db: Db = prisma) {
     });
   }
 
-  // No mobile: look for the same person by ID proof, then by name among
-  // other guests who also have no number.
+  // No mobile given. Try the ID proof first, then fall back to the name.
+  //
+  // The name lookup deliberately includes guests who *do* have a number on
+  // file: the same person is often booked once with a phone number and once
+  // without, and ignoring those left two rows for one guest. Reusing the
+  // existing record keeps their history together, and the number already
+  // stored is preserved rather than being wiped by this booking.
   const existing = idProofNumber
     ? await db.guest.findFirst({
-        where: { idProofNumber, OR: [{ mobile: null }, { name }] },
+        where: { idProofNumber },
         orderBy: { createdAt: "asc" },
       })
     : await db.guest.findFirst({
-        where: { mobile: null, name: { equals: name, mode: "insensitive" } },
+        where: { name: { equals: name, mode: "insensitive" } },
         orderBy: { createdAt: "asc" },
       });
 
