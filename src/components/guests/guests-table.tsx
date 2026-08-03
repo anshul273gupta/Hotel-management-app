@@ -67,7 +67,14 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
         to.setHours(23, 59, 59, 999);
         if (new Date(guest.lastCheckIn) > to) return false;
       }
-      if (statusFilter !== "ALL" && guest.currentStatus !== statusFilter) return false;
+      if (statusFilter === "CANCELLED") {
+        // currentStatus only reports the guest's latest booking, so a
+        // cancellation followed by a later stay would never surface. Match
+        // on any cancelled booking in their history instead.
+        if (!guest.bookings.some((b) => b.status === "CANCELLED")) return false;
+      } else if (statusFilter !== "ALL" && guest.currentStatus !== statusFilter) {
+        return false;
+      }
       return true;
     });
   }, [guests, search, fromDate, toDate, statusFilter]);

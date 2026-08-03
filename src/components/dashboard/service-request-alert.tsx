@@ -57,11 +57,19 @@ export function ServiceRequestAlert() {
 
   useRealtime((kind, data) => {
     if (kind !== "notification") return;
-    const notification = (data as { data: Notification }).data;
-    if (notification.type !== "SERVICE_REQUEST") return;
 
-    playTing();
-    setQueue((prev) => [...prev, notification]);
+    // The realtime provider also emits "notification" with no payload on its
+    // periodic poll, as a hint to refetch. Only a live event carries an actual
+    // notification, and alerting on the poll popped this dialog every tick.
+    const notification = (data as { data?: Notification } | null)?.data;
+    if (!notification || notification.type !== "SERVICE_REQUEST") return;
+
+    // A reconnect can replay an event that's already queued.
+    setQueue((prev) => {
+      if (prev.some((n) => n.id === notification.id)) return prev;
+      playTing();
+      return [...prev, notification];
+    });
   });
 
   const dismiss = useCallback(() => {

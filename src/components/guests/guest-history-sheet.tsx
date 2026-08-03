@@ -160,13 +160,32 @@ export function GuestHistorySheet({
                 {guest.bookings.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No stays recorded yet.</p>
                 ) : (
-                  guest.bookings.map((booking) => (
-                    <div key={booking.id} className="rounded-lg border p-2.5 text-sm">
+                  guest.bookings.map((booking) => {
+                    // Cancelled stays are kept for the record but shouldn't
+                    // read as live bookings, so they're dimmed and struck out.
+                    const isCancelled = booking.status === "CANCELLED";
+                    return (
+                    <div
+                      key={booking.id}
+                      className={
+                        isCancelled
+                          ? "rounded-lg border border-dashed bg-muted/30 p-2.5 text-sm opacity-70"
+                          : "rounded-lg border p-2.5 text-sm"
+                      }
+                    >
                       <div className="flex items-center justify-between">
-                        <p className="font-medium">Room {booking.roomNumber}</p>
-                        <Badge className={`${PAYMENT_STATUS_COLORS[booking.paymentStatus]} border-0`}>
-                          {PAYMENT_STATUS_LABELS[booking.paymentStatus]}
-                        </Badge>
+                        <p className={isCancelled ? "font-medium line-through" : "font-medium"}>
+                          Room {booking.roomNumber}
+                        </p>
+                        {isCancelled ? (
+                          <Badge className="border-0 bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300">
+                            Cancelled
+                          </Badge>
+                        ) : (
+                          <Badge className={`${PAYMENT_STATUS_COLORS[booking.paymentStatus]} border-0`}>
+                            {PAYMENT_STATUS_LABELS[booking.paymentStatus]}
+                          </Badge>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground">
                         {formatDate(booking.checkInDate)} →{" "}
@@ -225,7 +244,8 @@ export function GuestHistorySheet({
                         );
                       })()}
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
