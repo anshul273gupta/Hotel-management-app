@@ -29,6 +29,7 @@ type DayInfo = {
   occupied: boolean;
   reserved: boolean;
   arrivals: UpcomingBooking[];
+  checkedIn: UpcomingBooking[];
   departures: UpcomingBooking[];
 };
 
@@ -43,7 +44,7 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
     function entry(key: number) {
       let value = map.get(key);
       if (!value) {
-        value = { occupied: false, reserved: false, arrivals: [], departures: [] };
+        value = { occupied: false, reserved: false, arrivals: [], checkedIn: [], departures: [] };
         map.set(key, value);
       }
       return value;
@@ -59,7 +60,14 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
         if (booking.status === "RESERVED") value.reserved = true;
       }
 
-      entry(start.getTime()).arrivals.push(booking);
+      // A guest who has already been checked in isn't "arriving" any more,
+      // even though their check-in date is today. Bucketing purely by date
+      // left them listed as expected arrivals for the rest of the day.
+      if (booking.status === "CHECKED_IN") {
+        entry(start.getTime()).checkedIn.push(booking);
+      } else {
+        entry(start.getTime()).arrivals.push(booking);
+      }
       entry(end.getTime()).departures.push(booking);
     }
 
@@ -68,6 +76,7 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
 
   const selectedInfo = dayInfo.get(dayKey(selected));
   const arrivals = selectedInfo?.arrivals ?? [];
+  const checkedIn = selectedInfo?.checkedIn ?? [];
   const departures = selectedInfo?.departures ?? [];
   const staying = useMemo(
     () =>
@@ -104,7 +113,8 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
     return formatDate(date);
   }
 
-  const hasBookingsOnSelectedDay = arrivals.length > 0 || departures.length > 0 || staying.length > 0;
+  const hasBookingsOnSelectedDay =
+    arrivals.length > 0 || checkedIn.length > 0 || departures.length > 0 || staying.length > 0;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
@@ -151,7 +161,7 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
               <span className="h-2.5 w-2.5 rounded-full bg-sky-300 dark:bg-sky-800" /> Reserved (not checked in yet)
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-green-500 dark:bg-green-400" /> Green dot = guest arriving
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500 dark:bg-green-400" /> Green dot = arrival or check-in
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-500 dark:bg-amber-400" /> Amber dot = guest leaving
@@ -180,6 +190,14 @@ export function BookingsCalendar({ bookings }: { bookings: UpcomingBooking[] }) 
                     label={`Arriving (${arrivals.length})`}
                     className="text-green-700 dark:text-green-400"
                     bookings={arrivals}
+                  />
+                )}
+                {checkedIn.length > 0 && (
+                  <BookingSection
+                    icon={<LogIn className="h-4 w-4" />}
+                    label={`Checked in today (${checkedIn.length})`}
+                    className="text-emerald-700 dark:text-emerald-400"
+                    bookings={checkedIn}
                   />
                 )}
                 {departures.length > 0 && (
