@@ -51,6 +51,9 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
   const [checkOutDone, setCheckOutDone] = useState<{ guestName: string; mobile: string | null; time: string } | null>(null);
   const colors = ROOM_STATUS_COLORS[room.status];
   const paymentDue = room.currentBooking && room.currentBooking.paymentStatus !== "PAID";
+  // Whichever booking the card is showing may carry a note worth flagging.
+  const bookingNote =
+    (room.currentBooking ?? room.reservedBooking ?? room.upcomingBooking)?.notes ?? null;
 
   async function handleToggleMaintenance() {
     const goingToMaintenance = room.status !== "MAINTENANCE";
@@ -139,6 +142,12 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
                 {paymentDue && (
                   <Badge className="border-0 bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300">
                     <CreditCard className="mr-1 h-3 w-3" /> Payment Due
+                  </Badge>
+                )}
+                {/* Flags a note on the card itself, so staff know to open it. */}
+                {bookingNote && (
+                  <Badge className="border-0 bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300">
+                    <NotebookText className="mr-1 h-3 w-3" /> Note
                   </Badge>
                 )}
                 <Badge className={`${colors.bg} ${colors.text} border-0`}>
@@ -248,11 +257,26 @@ export function RoomCard({ room }: { room: RoomWithCurrentBooking }) {
                       )}
                     </div>
                   </div>
+                  {/* Standing preferences kept against the guest record. */}
                   {b.guest.specialRequests && (
                     <p className="flex items-start gap-2">
                       <NotebookText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       {b.guest.specialRequests}
                     </p>
+                  )}
+                  {/* Notes attached to this stay, including anything added
+                      later from Edit Booking. Kept separate from the guest's
+                      standing requests, which apply to every visit. */}
+                  {b.notes && (
+                    <div className="flex items-start gap-2 rounded-md bg-amber-50 px-2.5 py-2 dark:bg-amber-950/30">
+                      <NotebookText className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-500" />
+                      <div>
+                        <p className="text-xs font-medium text-amber-800 dark:text-amber-400">
+                          Booking note
+                        </p>
+                        <p className="text-amber-900 dark:text-amber-200">{b.notes}</p>
+                      </div>
+                    </div>
                   )}
                 </div>
               );
