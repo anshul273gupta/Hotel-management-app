@@ -6,6 +6,7 @@ import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
+import { findOrCreateGuest } from "@/lib/guest-matching";
 
 const schema = z
   .object({
@@ -87,40 +88,16 @@ export async function POST(request: Request) {
   const amountPaid = data.advanceAmount;
   const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
 
-  // Match a returning guest by mobile number. Without one there's nothing to
-  // match on, so a fresh guest record is created for this stay instead.
-  const guest = data.mobile
-    ? await prisma.guest.upsert({
-        where: { mobile: data.mobile },
-        create: {
-          title: data.title,
-          name: data.guestName,
-          mobile: data.mobile,
-          address: data.address || undefined,
-          idProofType: data.idProofType || undefined,
-          idProofNumber: data.idProofNumber || undefined,
-          specialRequests: data.specialRequests || undefined,
-        },
-        update: {
-          title: data.title,
-          name: data.guestName,
-          ...(data.idProofType ? { idProofType: data.idProofType } : {}),
-          ...(data.idProofNumber ? { idProofNumber: data.idProofNumber } : {}),
-          ...(data.address ? { address: data.address } : {}),
-          ...(data.specialRequests ? { specialRequests: data.specialRequests } : {}),
-        },
-      })
-    : await prisma.guest.create({
-        data: {
-          title: data.title,
-          name: data.guestName,
-          mobile: null,
-          address: data.address || undefined,
-          idProofType: data.idProofType || undefined,
-          idProofNumber: data.idProofNumber || undefined,
-          specialRequests: data.specialRequests || undefined,
-        },
-      });
+  // Reuse the guest record when this is someone who has stayed before.
+  const guest = await findOrCreateGuest({
+    title: data.title,
+    guestName: data.guestName,
+    mobile: data.mobile,
+    address: data.address,
+    idProofType: data.idProofType,
+    idProofNumber: data.idProofNumber,
+    specialRequests: data.specialRequests,
+  });
 
   // Atomic: re-check availability, create booking, and update room status together
   let booking: Awaited<ReturnType<typeof prisma.booking.create>> & { guest: typeof guest; room: { number: string; type: string; floor: number; maintenanceStatus: string } };

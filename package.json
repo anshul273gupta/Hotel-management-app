@@ -10,7 +10,8 @@
     "db:import-sqlite": "node scripts/migrate-sqlite-to-postgres.js",
     "start": "next start",
     "lint": "eslint",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "guests:dedupe": "node scripts/merge-duplicate-guests.js"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
