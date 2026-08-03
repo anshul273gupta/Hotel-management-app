@@ -6,8 +6,6 @@ import { toast } from "sonner";
 import { Star, Loader2, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -16,6 +14,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { DARSHAN_ITINERARY } from "@/lib/darshan-itinerary";
 import {
   SERVICE_REQUEST_TYPE_LABELS,
   SERVICE_REQUEST_TYPE_ICONS,
@@ -25,7 +24,11 @@ import {
 import { timeAgo } from "@/lib/format";
 import type { ServiceRequestType, ServiceRequestStatus } from "@/lib/types";
 
-const REQUEST_TYPES = Object.keys(SERVICE_REQUEST_TYPE_LABELS) as ServiceRequestType[];
+// TEMPLE_INFO opens an itinerary rather than raising a request, and CUSTOM
+// existed only to collect free text, which guests no longer type.
+const HIDDEN_TYPES: ServiceRequestType[] = ["CUSTOM"];
+const REQUEST_TYPES = (Object.keys(SERVICE_REQUEST_TYPE_LABELS) as ServiceRequestType[])
+  .filter((t) => !HIDDEN_TYPES.includes(t));
 
 /** Builds a `tel:` link from a phone number, assuming 10-digit numbers are Indian (+91). */
 function buildTelLink(phone: string): string | null {
@@ -65,6 +68,7 @@ export function ServiceRequestPage({
   housekeepingNextWindow: string;
 }) {
   const [selectedType, setSelectedType] = useState<ServiceRequestType | null>(null);
+  const [showTempleInfo, setShowTempleInfo] = useState(false);
   const [description, setDescription] = useState("");
 
   // Tea & Coffee — separate qty for each, managed outside dialog
@@ -106,6 +110,8 @@ export function ServiceRequestPage({
 
   function openRequest(type: ServiceRequestType) {
     if (type === "CALL_RECEPTION") { callReception(); return; }
+    // Darshan details are information, not something reception acts on.
+    if (type === "TEMPLE_INFO") { setShowTempleInfo(true); return; }
     if (type === "TEA_COFFEE") {
       setTeaQty(0);
       setCoffeeQty(0);
@@ -159,10 +165,6 @@ export function ServiceRequestPage({
 
   async function submitRequest() {
     if (!selectedType) return;
-    if (selectedType === "CUSTOM" && !description.trim()) {
-      toast.error("Please describe your request");
-      return;
-    }
     setSubmitting(true);
     try {
       const formData = new FormData();
@@ -319,17 +321,6 @@ export function ServiceRequestPage({
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="tc-notes">Additional notes (optional)</Label>
-                <Textarea
-                  id="tc-notes"
-                  rows={2}
-                  placeholder="E.g. extra sugar, no milk..."
-                  value={tcNotes}
-                  onChange={(e) => setTcNotes(e.target.value)}
-                />
-              </div>
-
               <Button
                 onClick={submitTeaCoffee}
                 disabled={tcSubmitting || (teaQty === 0 && coffeeQty === 0)}
@@ -434,6 +425,36 @@ export function ServiceRequestPage({
       </div>
 
       {/* Dialog for all request types except TEA_COFFEE */}
+      <Dialog open={showTempleInfo} onOpenChange={setShowTempleInfo}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>🛕 Temple Darshan Information</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {DARSHAN_ITINERARY.map((day) => (
+              <div key={day.title} className="space-y-2">
+                <p className="text-sm font-semibold text-foreground">{day.title}</p>
+                {day.stops.map((stop) => (
+                  <div key={stop.time} className="rounded-lg border border-primary/10 px-3 py-2">
+                    <p className="text-xs font-medium text-primary">{stop.time}</p>
+                    <p className="mt-0.5 text-sm leading-relaxed text-foreground">{stop.detail}</p>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground">
+              Timings are a suggestion and may vary. Please call reception if you would like help
+              arranging a taxi.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button className="w-full" onClick={() => setShowTempleInfo(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={selectedType !== null}
         onOpenChange={(open) => { if (!open) setSelectedType(null); }}
@@ -446,20 +467,9 @@ export function ServiceRequestPage({
                   {SERVICE_REQUEST_TYPE_ICONS[selectedType]} {SERVICE_REQUEST_TYPE_LABELS[selectedType]}
                 </DialogTitle>
               </DialogHeader>
-              <div className="space-y-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="description">
-                    {selectedType === "CUSTOM" ? "Tell us what you need" : "Additional notes (optional)"}
-                  </Label>
-                  <Textarea
-                    id="description"
-                    rows={3}
-                    placeholder={selectedType === "CUSTOM" ? "E.g. need an extra pillow and a hairdryer" : "Any extra details..."}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                </div>
-              </div>
+              <p className="text-sm text-muted-foreground">
+                Reception will be notified straight away.
+              </p>
               <DialogFooter>
                 <Button onClick={submitRequest} disabled={submitting} className="w-full gap-2">
                   {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
