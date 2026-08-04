@@ -112,6 +112,8 @@ export default async function GuestRoomPage({ params }: { params: Promise<{ toke
       roomNumber={room.number}
       hotelName={HOTEL_NAME}
       receptionPhone={HOTEL_PHONE}
+      wifiName={process.env.NEXT_PUBLIC_WIFI_SSID ?? HOTEL_NAME}
+      wifiPassword={process.env.NEXT_PUBLIC_WIFI_PASSWORD ?? ""}
       housekeepingOpen={isHousekeepingOpen()}
       housekeepingNextWindow={nextHousekeepingWindow()}
     />

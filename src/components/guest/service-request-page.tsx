@@ -56,6 +56,8 @@ export function ServiceRequestPage({
   roomNumber,
   hotelName,
   receptionPhone,
+  wifiName,
+  wifiPassword,
   housekeepingOpen,
   housekeepingNextWindow,
 }: {
@@ -63,12 +65,16 @@ export function ServiceRequestPage({
   roomNumber: string;
   hotelName: string;
   receptionPhone: string;
+  /** Shown so guests can get online without asking reception. */
+  wifiName: string;
+  wifiPassword: string;
   /** Housekeeping runs two shifts a day; requests outside them are declined. */
   housekeepingOpen: boolean;
   housekeepingNextWindow: string;
 }) {
   const [selectedType, setSelectedType] = useState<ServiceRequestType | null>(null);
   const [showTempleInfo, setShowTempleInfo] = useState(false);
+  const [wifiCopied, setWifiCopied] = useState(false);
   const [description, setDescription] = useState("");
 
   // Tea & Coffee — separate qty for each, managed outside dialog
@@ -121,6 +127,19 @@ export function ServiceRequestPage({
     }
     setSelectedType(type);
     setDescription("");
+  }
+
+  async function copyWifiPassword() {
+    try {
+      await navigator.clipboard.writeText(wifiPassword);
+      setWifiCopied(true);
+      toast.success("WiFi password copied");
+      setTimeout(() => setWifiCopied(false), 2000);
+    } catch {
+      // Clipboard is blocked on insecure origins and some in-app browsers;
+      // the password is on screen either way.
+      toast.error("Couldn't copy — please type it in");
+    }
   }
 
   function callReception() {
@@ -233,6 +252,52 @@ export function ServiceRequestPage({
           <h1 className="mt-1 text-2xl font-bold text-foreground">Room {roomNumber}</h1>
           <p className="text-sm text-muted-foreground">How can we help you today?</p>
         </div>
+
+        {/* WiFi details, so guests can get online without ringing reception. */}
+        {wifiPassword && (
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="px-4 py-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl leading-none">📶</span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-foreground">Stay connected, stay blessed</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Free WiFi for our guests — share your Ujjain moments.
+                  </p>
+
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2 rounded-lg bg-background/70 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                          Network
+                        </p>
+                        <p className="truncate font-medium text-foreground">{wifiName}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 rounded-lg bg-background/70 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                          Password
+                        </p>
+                        <p className="truncate font-mono text-base font-semibold tracking-wider text-foreground">
+                          {wifiPassword}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={copyWifiPassword}
+                        className="shrink-0 rounded-lg border border-primary/30 px-3 py-1.5 text-xs font-medium text-primary active:scale-95"
+                      >
+                        {wifiCopied ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Tea & Coffee inline panel — shown instead of dialog */}
         {showTeaCoffee && (
