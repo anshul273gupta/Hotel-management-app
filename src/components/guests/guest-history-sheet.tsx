@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Download, Eye, Loader2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -135,7 +135,45 @@ export function GuestHistorySheet({
                 </div>
               )}
 
-              {guest.idProofUrl && (
+              {guest.hasIdProofImage && (
+                <div className="space-y-2 rounded-lg border p-2.5">
+                  <p className="text-xs font-medium text-muted-foreground">ID Proof Photo</p>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`/api/guests/${guest.id}/id-proof`}
+                    alt={`ID proof for ${guest.name}`}
+                    className="w-full rounded-md border object-contain"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 gap-1.5"
+                      render={
+                        <a
+                          href={`/api/guests/${guest.id}/id-proof`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        />
+                      }
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      View full size
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 gap-1.5"
+                      render={<a href={`/api/guests/${guest.id}/id-proof?download=1`} download />}
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Download
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {guest.idProofUrl && !guest.hasIdProofImage && (
                 <a
                   href={guest.idProofUrl}
                   target="_blank"

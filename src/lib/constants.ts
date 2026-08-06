@@ -2,11 +2,8 @@
 
 export const ID_PROOF_TYPES = [
   "Aadhaar Card",
-  "PAN Card",
-  "Passport",
   "Driving License",
   "Voter ID",
-  "Other",
 ] as const;
 
 /** Strips spaces/hyphens and uppercases an ID proof number before format validation. */
@@ -26,20 +23,6 @@ export const ID_PROOF_PATTERNS: Record<
     placeholder: "12-digit Aadhaar number",
     maxLength: 14,
   },
-  "PAN Card": {
-    regex: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
-    message: "Enter a valid PAN number (format: ABCDE1234F)",
-    label: "PAN Number",
-    placeholder: "5 letters + 4 digits + 1 letter",
-    maxLength: 10,
-  },
-  Passport: {
-    regex: /^[A-Z][0-9]{7}$/,
-    message: "Enter a valid Indian passport number (1 letter + 7 digits)",
-    label: "Passport Number",
-    placeholder: "1 letter followed by 7 digits",
-    maxLength: 8,
-  },
   "Driving License": {
     regex: /^[A-Z]{2}[0-9]{13}$/,
     message: "Enter a valid driving licence number (state code + 13 digits)",
@@ -53,13 +36,6 @@ export const ID_PROOF_PATTERNS: Record<
     label: "Voter ID / EPIC Number",
     placeholder: "3 letters + 7 digits",
     maxLength: 10,
-  },
-  Other: {
-    regex: /^[A-Z0-9]{3,20}$/,
-    message: "Enter a valid ID proof number",
-    label: "ID Number",
-    placeholder: "ID proof number",
-    maxLength: 20,
   },
 };
 

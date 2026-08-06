@@ -63,6 +63,11 @@ model Guest {
   idProofType     String?
   idProofNumber   String?
   idProofUrl      String?
+  /// Photo of the ID document, stored inline rather than on disk: serverless
+  /// hosting has no writable filesystem. Kept out of default queries because
+  /// the bytes are large — see getGuestIdProof.
+  idProofImage    Bytes?
+  idProofMimeType String?
   specialRequests String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

@@ -3,6 +3,9 @@ import { toDecimalNumber } from "@/lib/format";
 
 export async function getGuestsRegister() {
   const guests = await prisma.guest.findMany({
+    // Pulling idProofImage into the register would ship every stored photo on
+    // each page load, so the bytes are fetched only by the download route.
+    omit: { idProofImage: true },
     include: {
       bookings: {
         include: { room: true },
@@ -40,6 +43,8 @@ export async function getGuestsRegister() {
       idProofType: guest.idProofType,
       idProofNumber: guest.idProofNumber,
       idProofUrl: guest.idProofUrl,
+      // Only whether a photo exists — the bytes stay out of the list query.
+      hasIdProofImage: guest.idProofMimeType !== null,
       specialRequests: guest.specialRequests,
       totalVisits: guest.bookings.length,
       totalSpending,

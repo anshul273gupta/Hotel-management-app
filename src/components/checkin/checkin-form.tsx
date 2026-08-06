@@ -1,18 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm, useFieldArray, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { toast } from "sonner";
 import {
+  Camera,
   CheckCircle2,
   Copy,
   Loader2,
   RotateCcw,
   Sparkles,
+  Upload,
   UserCheck,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -140,6 +143,11 @@ export function CheckInForm({
   const router = useRouter();
   const [returningGuest, setReturningGuest] = useState<GuestLookup | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // ID proof photo, held until the booking is submitted.
+  const [idProofFile, setIdProofFile] = useState<File | null>(null);
+  const [idProofPreview, setIdProofPreview] = useState<string | null>(null);
+  const idProofCameraRef = useRef<HTMLInputElement>(null);
+  const idProofFileRef = useRef<HTMLInputElement>(null);
   const [result, setResult] = useState<CheckInResult[] | null>(null);
 
   const {
@@ -194,6 +202,29 @@ export function CheckInForm({
     append({ roomId: room.id, roomRate: Number(room.basePrice) });
   }
 
+  function onIdProofPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0] ?? null;
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      toast.error("Image is too large (max 6 MB)");
+      e.target.value = "";
+      return;
+    }
+    setIdProofFile(file);
+    setIdProofPreview((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return URL.createObjectURL(file);
+    });
+  }
+
+  function clearIdProof() {
+    setIdProofFile(null);
+    setIdProofPreview((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return null;
+    });
+  }
+
   async function lookupGuest(mobile: string) {
     if (!/^[6-9]\d{9}$/.test(mobile)) {
       setReturningGuest(null);
@@ -239,6 +270,7 @@ export function CheckInForm({
         formData.append("roomId", entry.roomId);
         formData.append("roomRate", String(entry.roomRate));
         formData.append("advanceAmount", String(shares[i]));
+        if (idProofFile) formData.append("idProofImage", idProofFile);
 
         const res = await fetch("/api/bookings", { method: "POST", body: formData });
         const data = await res.json();
@@ -481,6 +513,71 @@ export function CheckInForm({
                   <p className="text-xs text-destructive">{errors.idProofNumber.message}</p>
                 )}
               </div>
+            </div>
+
+            {/* Photo of the document. capture="environment" opens the rear
+                camera straight away on a phone, while a laptop falls back to
+                the normal file picker. */}
+            <div className="space-y-1.5">
+              <Label>
+                ID Proof Photo <span className="font-normal text-muted-foreground">(optional)</span>
+              </Label>
+              {idProofPreview ? (
+                <div className="flex items-center gap-3 rounded-lg border p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={idProofPreview}
+                    alt="ID proof preview"
+                    className="h-20 w-28 rounded-md object-cover"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{idProofFile?.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {((idProofFile?.size ?? 0) / 1024).toFixed(0)} KB
+                    </p>
+                  </div>
+                  <Button type="button" variant="ghost" size="sm" onClick={clearIdProof}>
+                    <X className="h-4 w-4" />
+                    Remove
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => idProofCameraRef.current?.click()}
+                  >
+                    <Camera className="h-4 w-4" />
+                    Take Photo
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="gap-1.5"
+                    onClick={() => idProofFileRef.current?.click()}
+                  >
+                    <Upload className="h-4 w-4" />
+                    Choose File
+                  </Button>
+                </div>
+              )}
+              <input
+                ref={idProofCameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={onIdProofPicked}
+              />
+              <input
+                ref={idProofFileRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={onIdProofPicked}
+              />
             </div>
 
             <div className="space-y-1.5">

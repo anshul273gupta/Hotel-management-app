@@ -7,6 +7,7 @@ import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
+import { readIdProofUpload } from "@/lib/id-proof";
 
 const schema = z
   .object({
@@ -88,6 +89,15 @@ export async function POST(request: Request) {
   const amountPaid = data.advanceAmount;
   const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
 
+  // Optional photo of the ID document, captured on the check-in form.
+  let idProof;
+  try {
+    idProof = await readIdProofUpload(formData.get("idProofImage"));
+  } catch (err) {
+    const e = err as { message?: string; status?: number };
+    return NextResponse.json({ error: { idProofImage: [e?.message ?? "Invalid image"] } }, { status: e?.status ?? 400 });
+  }
+
   // Reuse the guest record when this is someone who has stayed before.
   const guest = await findOrCreateGuest({
     title: data.title,
@@ -98,6 +108,13 @@ export async function POST(request: Request) {
     idProofNumber: data.idProofNumber,
     specialRequests: data.specialRequests,
   });
+
+  if (idProof) {
+    await prisma.guest.update({
+      where: { id: guest.id },
+      data: { idProofImage: idProof.bytes, idProofMimeType: idProof.mimeType },
+    });
+  }
 
   // Atomic: re-check availability, create booking, and update room status together
   let booking: Awaited<ReturnType<typeof prisma.booking.create>> & { guest: typeof guest; room: { number: string; type: string; floor: number; maintenanceStatus: string } };
