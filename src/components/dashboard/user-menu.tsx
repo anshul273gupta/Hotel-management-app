@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { LogOut, User } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -26,12 +26,30 @@ function getInitials(name: string) {
 }
 
 export function UserMenu({ name, email, role }: { name: string; email: string; role: Role }) {
-  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        // Without this the WebView may answer from its own cache and never
+        // actually reach the server, leaving the session alive.
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+    } catch {
+      // Offline or the request failed — still send them to the login page
+      // below. The redirect there cannot succeed while a valid session
+      // exists, so a failed sign-out can never look like a successful one.
+    }
+
+    // A full page load, not a client-side route change. Next.js keeps a
+    // client-side cache of already-rendered pages, so router.push alone could
+    // show the dashboard again from memory even though the cookie was gone.
+    // Replacing the history entry also stops Back returning to the dashboard.
+    window.location.replace("/login");
   }
 
   return (
@@ -59,9 +77,13 @@ export function UserMenu({ name, email, role }: { name: string; email: string; r
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={handleLogout} className="text-rose-600 dark:text-rose-400">
+        <DropdownMenuItem
+          onClick={handleLogout}
+          disabled={loggingOut}
+          className="text-rose-600 dark:text-rose-400"
+        >
           <LogOut className="h-4 w-4" />
-          Log out
+          {loggingOut ? "Logging out…" : "Log out"}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
