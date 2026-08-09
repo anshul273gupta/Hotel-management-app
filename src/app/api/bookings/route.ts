@@ -7,7 +7,7 @@ import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
-import { readIdProofUpload } from "@/lib/id-proof";
+import { readIdProofUploads } from "@/lib/id-proof";
 import { HOTEL_TIMEZONE, parseHotelDateTime } from "@/lib/service-hours";
 
 const schema = z
@@ -95,9 +95,9 @@ export async function POST(request: Request) {
   const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
 
   // Optional photo of the ID document, captured on the check-in form.
-  let idProof;
+  let idProofs;
   try {
-    idProof = await readIdProofUpload(formData.get("idProofImage"));
+    idProofs = await readIdProofUploads(formData.getAll("idProofImage"));
   } catch (err) {
     const e = err as { message?: string; status?: number };
     return NextResponse.json({ error: { idProofImage: [e?.message ?? "Invalid image"] } }, { status: e?.status ?? 400 });
@@ -114,10 +114,11 @@ export async function POST(request: Request) {
     specialRequests: data.specialRequests,
   });
 
-  if (idProof) {
-    await prisma.guest.update({
-      where: { id: guest.id },
-      data: { idProofImage: idProof.bytes, idProofMimeType: idProof.mimeType },
+  if (idProofs.length > 0) {
+    // Replace rather than append: a re-check-in means fresh documents.
+    await prisma.guestIdProof.deleteMany({ where: { guestId: guest.id } });
+    await prisma.guestIdProof.createMany({
+      data: idProofs.map((p) => ({ guestId: guest.id, image: p.bytes, mimeType: p.mimeType })),
     });
   }
 

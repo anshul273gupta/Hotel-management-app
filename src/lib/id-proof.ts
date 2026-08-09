@@ -35,6 +35,24 @@ export async function readIdProofUpload(file: unknown): Promise<IdProofUpload | 
   };
 }
 
+import { MAX_ID_PROOFS } from "@/lib/id-proof-limits";
+
+export { MAX_ID_PROOFS };
+
+/**
+ * Reads every ID proof image submitted with a booking, capping the count so a
+ * runaway client can't push dozens of megabytes into the row.
+ */
+export async function readIdProofUploads(files: unknown[]): Promise<IdProofUpload[]> {
+  const out: IdProofUpload[] = [];
+  for (const file of files) {
+    const parsed = await readIdProofUpload(file);
+    if (parsed) out.push(parsed);
+    if (out.length >= MAX_ID_PROOFS) break;
+  }
+  return out;
+}
+
 /** File extension for the download filename, derived from the stored type. */
 export function extensionForMimeType(mimeType: string | null): string {
   switch (mimeType) {

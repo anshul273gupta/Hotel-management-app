@@ -63,9 +63,8 @@ model Guest {
   idProofType     String?
   idProofNumber   String?
   idProofUrl      String?
-  /// Photo of the ID document, stored inline rather than on disk: serverless
-  /// hosting has no writable filesystem. Kept out of default queries because
-  /// the bytes are large — see getGuestIdProof.
+  /// Retained so the first photo captured before multi-image support keeps
+  /// working; new captures go to GuestIdProof.
   idProofImage    Bytes?
   idProofMimeType String?
   specialRequests String?
@@ -73,9 +72,28 @@ model Guest {
   updatedAt       DateTime @updatedAt
 
   bookings Booking[]
+  idProofs GuestIdProof[]
 
   @@index([mobile])
   @@map("guests")
+}
+
+/// Photos of a guest's ID document — up to three per guest.
+///
+/// Stored inline rather than on disk because serverless hosting has no
+/// persistent filesystem. The bytes are never selected by list queries; only
+/// the download route reads them.
+model GuestIdProof {
+  id        String   @id @default(cuid())
+  guestId   String
+  image     Bytes
+  mimeType  String
+  createdAt DateTime @default(now())
+
+  guest Guest @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([guestId])
+  @@map("guest_id_proofs")
 }
 
 model Booking {

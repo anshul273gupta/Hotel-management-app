@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { WhatsAppButton } from "@/components/whatsapp/whatsapp-button";
+import { MAX_ID_PROOFS } from "@/lib/id-proof-limits";
 import { ID_PROOF_PATTERNS, ID_PROOF_TYPES, PAYMENT_METHOD_LABELS, normalizeIdProofNumber } from "@/lib/constants";
 import { blockDigitKeys, blockNonDigitKeys } from "@/lib/input-guards";
 import { cn } from "@/lib/utils";
@@ -144,8 +145,9 @@ export function CheckInForm({
   const [returningGuest, setReturningGuest] = useState<GuestLookup | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // ID proof photo, held until the booking is submitted.
-  const [idProofFile, setIdProofFile] = useState<File | null>(null);
-  const [idProofPreview, setIdProofPreview] = useState<string | null>(null);
+  // Up to three ID photos — typically the front and back of one document.
+  const [idProofFiles, setIdProofFiles] = useState<File[]>([]);
+  const [idProofPreviews, setIdProofPreviews] = useState<string[]>([]);
   const idProofCameraRef = useRef<HTMLInputElement>(null);
   const idProofFileRef = useRef<HTMLInputElement>(null);
   const [result, setResult] = useState<CheckInResult[] | null>(null);
@@ -203,26 +205,36 @@ export function CheckInForm({
   }
 
   function onIdProofPicked(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0] ?? null;
-    if (!file) return;
-    if (file.size > 6 * 1024 * 1024) {
-      toast.error("Image is too large (max 6 MB)");
-      e.target.value = "";
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (picked.length === 0) return;
+
+    const room = MAX_ID_PROOFS - idProofFiles.length;
+    if (room <= 0) {
+      toast.error(`You can attach up to ${MAX_ID_PROOFS} photos`);
       return;
     }
-    setIdProofFile(file);
-    setIdProofPreview((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return URL.createObjectURL(file);
+
+    const accepted = picked.slice(0, room).filter((f) => {
+      if (f.size > 6 * 1024 * 1024) {
+        toast.error(`${f.name} is too large (max 6 MB)`);
+        return false;
+      }
+      return true;
     });
+    if (accepted.length === 0) return;
+    if (picked.length > room) toast.error(`Only ${MAX_ID_PROOFS} photos can be attached`);
+
+    setIdProofFiles((prev) => [...prev, ...accepted]);
+    setIdProofPreviews((prev) => [...prev, ...accepted.map((f) => URL.createObjectURL(f))]);
   }
 
-  function clearIdProof() {
-    setIdProofFile(null);
-    setIdProofPreview((old) => {
-      if (old) URL.revokeObjectURL(old);
-      return null;
+  function removeIdProof(index: number) {
+    setIdProofPreviews((prev) => {
+      URL.revokeObjectURL(prev[index]);
+      return prev.filter((_, i) => i !== index);
     });
+    setIdProofFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function lookupGuest(mobile: string) {
@@ -270,7 +282,7 @@ export function CheckInForm({
         formData.append("roomId", entry.roomId);
         formData.append("roomRate", String(entry.roomRate));
         formData.append("advanceAmount", String(shares[i]));
-        if (idProofFile) formData.append("idProofImage", idProofFile);
+        idProofFiles.forEach((f) => formData.append("idProofImage", f));
 
         const res = await fetch("/api/bookings", { method: "POST", body: formData });
         const data = await res.json();
@@ -520,28 +532,31 @@ export function CheckInForm({
                 the normal file picker. */}
             <div className="space-y-1.5">
               <Label>
-                ID Proof Photo <span className="font-normal text-muted-foreground">(optional)</span>
+                ID Proof Photos <span className="font-normal text-muted-foreground">(optional)</span>
               </Label>
-              {idProofPreview ? (
-                <div className="flex items-center gap-3 rounded-lg border p-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={idProofPreview}
-                    alt="ID proof preview"
-                    className="h-20 w-28 rounded-md object-cover"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{idProofFile?.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {((idProofFile?.size ?? 0) / 1024).toFixed(0)} KB
-                    </p>
-                  </div>
-                  <Button type="button" variant="ghost" size="sm" onClick={clearIdProof}>
-                    <X className="h-4 w-4" />
-                    Remove
-                  </Button>
+              {idProofPreviews.length > 0 && (
+                <div className="grid grid-cols-3 gap-2">
+                  {idProofPreviews.map((preview, i) => (
+                    <div key={preview} className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={preview}
+                        alt={`ID proof ${i + 1}`}
+                        className="h-20 w-full rounded-md border object-cover"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeIdProof(i)}
+                        aria-label={`Remove photo ${i + 1}`}
+                        className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-1 text-white shadow"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ) : (
+              )}
+              {idProofFiles.length < MAX_ID_PROOFS && (
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
@@ -561,6 +576,9 @@ export function CheckInForm({
                     <Upload className="h-4 w-4" />
                     Choose File
                   </Button>
+                  <span className="self-center text-xs text-muted-foreground">
+                    {idProofFiles.length}/{MAX_ID_PROOFS}
+                  </span>
                 </div>
               )}
               <input
@@ -575,6 +593,7 @@ export function CheckInForm({
                 ref={idProofFileRef}
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
+                multiple
                 className="hidden"
                 onChange={onIdProofPicked}
               />

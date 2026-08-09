@@ -7,6 +7,8 @@ export async function getGuestsRegister() {
     // each page load, so the bytes are fetched only by the download route.
     omit: { idProofImage: true },
     include: {
+      // Count only — the bytes must never ship with the register.
+      _count: { select: { idProofs: true } },
       bookings: {
         include: { room: true },
         orderBy: { checkInDate: "desc" },
@@ -44,7 +46,8 @@ export async function getGuestsRegister() {
       idProofNumber: guest.idProofNumber,
       idProofUrl: guest.idProofUrl,
       // Only whether a photo exists — the bytes stay out of the list query.
-      hasIdProofImage: guest.idProofMimeType !== null,
+      // Legacy single photo still counts when no newer ones exist.
+      idProofCount: guest._count.idProofs > 0 ? guest._count.idProofs : (guest.idProofMimeType ? 1 : 0),
       specialRequests: guest.specialRequests,
       totalVisits: guest.bookings.length,
       totalSpending,

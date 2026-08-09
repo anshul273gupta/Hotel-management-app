@@ -4,10 +4,10 @@ import { getSession } from "@/lib/session";
 import { extensionForMimeType } from "@/lib/id-proof";
 
 /**
- * Serves a guest's ID proof photo.
+ * Serves one of a guest's ID proof photos.
  *
- * Add ?download=1 to get it as a file attachment rather than displayed inline,
- * so staff can save a copy for the register.
+ *   ?i=0          which photo (defaults to the first)
+ *   ?download=1   send as an attachment rather than displaying inline
  *
  * Staff-only: this is identity documentation and must never be reachable from
  * the guest-facing QR pages.
@@ -19,23 +19,45 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   }
 
   const { id } = await params;
+  const url = new URL(request.url);
+  const index = Math.max(0, Number(url.searchParams.get("i") ?? "0") || 0);
+
   const guest = await prisma.guest.findUnique({
     where: { id },
-    select: { name: true, idProofImage: true, idProofMimeType: true },
+    select: {
+      name: true,
+      idProofImage: true,
+      idProofMimeType: true,
+      idProofs: {
+        orderBy: { createdAt: "asc" },
+        select: { image: true, mimeType: true },
+      },
+    },
   });
+  if (!guest) {
+    return NextResponse.json({ error: "Guest not found" }, { status: 404 });
+  }
 
-  if (!guest?.idProofImage) {
+  // Photos captured before multi-image support live on the guest row itself.
+  const legacy =
+    guest.idProofImage && guest.idProofs.length === 0
+      ? [{ image: guest.idProofImage, mimeType: guest.idProofMimeType ?? "image/jpeg" }]
+      : [];
+  const photos = guest.idProofs.length > 0 ? guest.idProofs : legacy;
+  const photo = photos[index];
+
+  if (!photo) {
     return NextResponse.json({ error: "No ID proof on file for this guest" }, { status: 404 });
   }
 
-  const mimeType = guest.idProofMimeType ?? "image/jpeg";
-  const wantsDownload = new URL(request.url).searchParams.get("download") === "1";
+  const wantsDownload = url.searchParams.get("download") === "1";
   const safeName = guest.name.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "") || "guest";
-  const filename = `id-proof-${safeName}.${extensionForMimeType(guest.idProofMimeType)}`;
+  const suffix = photos.length > 1 ? `-${index + 1}` : "";
+  const filename = `id-proof-${safeName}${suffix}.${extensionForMimeType(photo.mimeType)}`;
 
-  return new NextResponse(new Uint8Array(guest.idProofImage), {
+  return new NextResponse(new Uint8Array(photo.image), {
     headers: {
-      "Content-Type": mimeType,
+      "Content-Type": photo.mimeType,
       "Content-Disposition": `${wantsDownload ? "attachment" : "inline"}; filename="${filename}"`,
       // Identity documents shouldn't sit in shared caches.
       "Cache-Control": "private, no-store",
