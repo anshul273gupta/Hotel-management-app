@@ -26,6 +26,20 @@ const config: CapacitorConfig = {
   android: {
     backgroundColor: '#052e16',
   },
+  plugins: {
+    /**
+     * Android 15+ always draws apps edge-to-edge, so the web page starts at the
+     * very top of the screen — behind the clock and battery icons. "css" makes
+     * Capacitor inject the real --safe-area-inset-* values into the page, which
+     * globals.css uses to push the header down and the tab bar up.
+     */
+    SystemBars: {
+      insetsHandling: 'css',
+      // DEFAULT = follow the device theme, so the clock is dark on our light
+      // header in light mode and light-on-dark when the app is in dark mode.
+      style: 'DEFAULT',
+    },
+  },
 };
 
 export default config;

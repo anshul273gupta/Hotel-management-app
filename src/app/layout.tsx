@@ -4,19 +4,31 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 
+/*
+ * Only the body font is preloaded. The other two are used for a handful of
+ * headings and code-style text, and preloading all three made the phone wait
+ * on three font downloads before the first paint.
+ */
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
+  preload: false,
 });
 
 const playfair = Playfair_Display({
   variable: "--font-display",
   subsets: ["latin"],
+  display: "swap",
+  // Headings only need the semibold cut we actually apply.
+  weight: ["600"],
+  preload: false,
 });
 
 export const metadata: Metadata = {

@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 @source not "../../prisma";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -117,6 +117,58 @@
   --sidebar-accent-foreground: oklch(0.92 0.018 88);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.78 0.16 83);
+}
+
+/*
+ * Safe areas — keeps the app clear of the phone's clock/battery bar at the top
+ * and the gesture bar at the bottom.
+ *
+ * The page is drawn edge-to-edge (viewportFit: "cover"), which is what makes
+ * the app look modern, but it also means the top of our header would sit
+ * underneath the status bar and the buttons there become untappable.
+ *
+ * Two sources fill these in:
+ *   - a plain browser / installed PWA supplies env(safe-area-inset-*)
+ *   - the Android wrapper (Capacitor 8) overwrites these same variable names
+ *     inline on <html>, which wins over this rule
+ * Either way the values below are a safe fallback of 0 on desktop.
+ */
+:root {
+  --safe-area-inset-top: env(safe-area-inset-top, 0px);
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
+  --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
+}
+
+/* Header sits below the status bar; tab bar and page sit above the gesture bar. */
+.app-header-safe {
+  padding-top: var(--safe-area-inset-top, 0px);
+  height: calc(4rem + var(--safe-area-inset-top, 0px));
+  padding-left: max(1rem, var(--safe-area-inset-left, 0px));
+  padding-right: max(1rem, var(--safe-area-inset-right, 0px));
+}
+
+@media (min-width: 768px) {
+  .app-header-safe {
+    padding-left: max(1.5rem, var(--safe-area-inset-left, 0px));
+    padding-right: max(1.5rem, var(--safe-area-inset-right, 0px));
+  }
+}
+
+.app-nav-safe {
+  padding-bottom: var(--safe-area-inset-bottom, 0px);
+}
+
+/* Room for the fixed tab bar plus the gesture bar below it. */
+.app-main-safe {
+  padding-bottom: calc(6rem + var(--safe-area-inset-bottom, 0px));
+}
+
+/* On desktop there is no tab bar, so revert to the normal small padding. */
+@media (min-width: 768px) {
+  .app-main-safe {
+    padding-bottom: 1.5rem;
+  }
 }
 
 @layer base {

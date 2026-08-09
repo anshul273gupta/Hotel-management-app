@@ -103,7 +103,12 @@ export function ArrivalCheckAlert() {
 
   useEffect(() => {
     fetchPending();
-    const interval = setInterval(fetchPending, 30_000);
+    // The realtime check below already refetches whenever a booking or room
+    // actually changes, so this timer is only a safety net. Two minutes (and
+    // only while the app is on screen) instead of every 30 seconds.
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") fetchPending();
+    }, 120_000);
     return () => clearInterval(interval);
   }, [fetchPending]);
 

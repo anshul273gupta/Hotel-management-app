@@ -43,7 +43,10 @@ export function MobileNav({ role }: { role: Role }) {
   const overflowActive = overflow.some((item) => isActive(pathname, item.href));
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden print:hidden">
+    // app-nav-safe pads by the gesture-bar height. It replaces a bare
+    // env(safe-area-inset-bottom), which stays 0 inside the Android app —
+    // there the value has to come from Capacitor's injected variable instead.
+    <nav className="app-nav-safe fixed inset-x-0 bottom-0 z-40 flex border-t bg-background/95 backdrop-blur md:hidden print:hidden">
       {tabs.map((item) => {
         const Icon = item.icon;
         const active = isActive(pathname, item.href);
@@ -81,7 +84,7 @@ export function MobileNav({ role }: { role: Role }) {
             <MoreHorizontal className="h-5 w-5" />
             More
           </SheetTrigger>
-          <SheetContent side="bottom" className="pb-[env(safe-area-inset-bottom)]">
+          <SheetContent side="bottom" className="app-nav-safe">
             <SheetHeader>
               <SheetTitle>More</SheetTitle>
             </SheetHeader>
