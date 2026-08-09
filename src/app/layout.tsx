@@ -3,7 +3,8 @@ import { Geist, Geist_Mono, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
-import { SplashScreen, SPLASH_SEEN_KEY } from "@/components/splash-screen";
+import { SplashScreen } from "@/components/splash-screen";
+import { SPLASH_SEEN_KEY } from "@/lib/splash";
 
 /*
  * Only the body font is preloaded. The other two are used for a handful of

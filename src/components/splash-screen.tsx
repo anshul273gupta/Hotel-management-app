@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { SPLASH_ELEMENT_ID, SPLASH_SEEN_KEY } from "@/lib/splash";
 
 /**
  * The 8-second Agrawal Inn intro animation.
@@ -19,9 +20,6 @@ import { usePathname } from "next/navigation";
  * play at all (autoplay refused, file missing, slow connection) the overlay
  * closes itself instead of trapping the user behind a blank screen.
  */
-
-export const SPLASH_ELEMENT_ID = "app-splash";
-export const SPLASH_SEEN_KEY = "agrawal-splash-seen";
 
 /** Hard ceiling — the overlay always leaves, whatever the video does. */
 const FAILSAFE_MS = 9500;

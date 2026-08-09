@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import Papa from "papaparse";
-import { Download, Search } from "lucide-react";
+import { Download, Loader2, Search } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,7 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | BookingStatus>("ALL");
+  const [exporting, setExporting] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = selectedId ? guests.find((g) => g.id === selectedId) ?? null : null;
 
@@ -79,30 +80,41 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
     });
   }, [guests, search, fromDate, toDate, statusFilter]);
 
-  function exportCsv() {
-    const rows = filtered.map((guest) => ({
-      Name: guest.name,
-      Mobile: guest.mobile ?? "",
-      Address: guest.address ?? "",
-      "ID Proof Type": guest.idProofType ?? "",
-      "ID Proof Number": guest.idProofNumber ?? "",
-      Status: guest.currentStatus ? BOOKING_STATUS_LABELS[guest.currentStatus] : "",
-      "Last Check-in": guest.lastCheckIn ? formatDate(guest.lastCheckIn) : "",
-      "Last Check-out": guest.lastCheckOut ? formatDate(guest.lastCheckOut) : "",
-      "Total Visits": guest.totalVisits,
-      "Total Spending": guest.totalSpending,
-      "Favorite Room": guest.favoriteRoom ?? "",
-      "Special Requests": guest.specialRequests ?? "",
-    }));
+  /**
+   * Save whatever the filters are currently showing as an Excel file.
+   *
+   * The workbook builder is imported on demand so the spreadsheet library is
+   * not part of the page's initial download — it is only fetched the first
+   * time someone actually exports.
+   */
+  async function exportExcel() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { buildGuestWorkbook, guestExportFilename } = await import("@/lib/guest-export");
+      const blob = await buildGuestWorkbook(filtered);
 
-    const csv = Papa.unparse(rows);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `guest-register-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = guestExportFilename();
+      // The link must be in the document for the Android WebView to act on the
+      // click — a detached element is silently ignored there, which is why
+      // downloads worked on a desktop but did nothing on a phone.
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Give the WebView time to start writing before the blob is released.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+      toast.success(
+        `Saved ${filtered.length} guest${filtered.length === 1 ? "" : "s"} to your downloads.`,
+      );
+    } catch {
+      toast.error("Could not create the Excel file. Please try again.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -149,9 +161,21 @@ export function GuestsTable({ guests }: { guests: GuestRegisterEntry[] }) {
               onChange={(e) => setToDate(e.target.value)}
             />
           </div>
-          <Button variant="outline" className="w-full gap-1.5 sm:w-auto" onClick={exportCsv}>
-            <Download className="h-4 w-4" />
-            Export CSV
+          <Button
+            variant="outline"
+            className="w-full gap-1.5 sm:w-auto"
+            onClick={exportExcel}
+            disabled={exporting || filtered.length === 0}
+            // Spell out what will be saved — the button exports what the
+            // filters currently show, not always the whole register.
+            title={`Save these ${filtered.length} guest${filtered.length === 1 ? "" : "s"} as an Excel file`}
+          >
+            {exporting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            {exporting ? "Preparing…" : "Save to Excel"}
           </Button>
         </div>
       </div>
