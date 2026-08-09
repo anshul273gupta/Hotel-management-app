@@ -24,7 +24,7 @@ const config: CapacitorConfig = {
     cleartext: !serverUrl.startsWith('https'),
   },
   android: {
-    backgroundColor: '#052e16',
+    backgroundColor: '#b3aca7',
   },
   plugins: {
     /**

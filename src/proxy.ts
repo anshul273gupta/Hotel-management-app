@@ -18,6 +18,12 @@ const PUBLIC_FILES = new Set([
   "/favicon.ico",
   "/favicon.png",
   "/logo.jpeg",
+  // The opening animation plays before anyone has signed in, so these must be
+  // fetchable without a session — otherwise they redirect to /login and the
+  // splash silently shows nothing.
+  "/splash.mp4",
+  "/splash.webm",
+  "/splash-poster.jpg",
 ]);
 
 function isPublicFile(pathname: string) {

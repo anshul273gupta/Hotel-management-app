@@ -140,6 +140,16 @@
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
 }
 
+/*
+ * The intro overlay is server-rendered so it covers the app from the very
+ * first paint. The inline script in <head> adds .splash-done before anything
+ * is drawn when the intro has already played this session, so returning to a
+ * page never flashes the animation again.
+ */
+.splash-done #app-splash {
+  display: none !important;
+}
+
 /* Header sits below the status bar; tab bar and page sit above the gesture bar. */
 .app-header-safe {
   padding-top: var(--safe-area-inset-top, 0px);

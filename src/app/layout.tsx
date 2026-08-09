@@ -3,6 +3,7 @@ import { Geist, Geist_Mono, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { SplashScreen, SPLASH_SEEN_KEY } from "@/components/splash-screen";
 
 /*
  * Only the body font is preloaded. The other two are used for a handful of
@@ -70,6 +71,20 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${playfair.variable} h-full antialiased`}
       suppressHydrationWarning
     >
+      <head>
+        {/*
+          Runs before the first paint. The intro is in the server-rendered HTML
+          so the app never flashes into view behind it — but that means it would
+          also appear on every page change. This hides it instantly (no flicker)
+          whenever it has already played during this app session, and on the
+          guest QR pages.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var seen=sessionStorage.getItem('${SPLASH_SEEN_KEY}')==='1';var guest=location.pathname.indexOf('/guest')===0;if(seen||guest){document.documentElement.classList.add('splash-done');}}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider
           attribute="class"
@@ -77,6 +92,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <SplashScreen />
           {children}
           <Toaster richColors position="top-right" />
         </ThemeProvider>
