@@ -5,6 +5,7 @@ import { getSession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
+import { parseHotelDateTime } from "@/lib/service-hours";
 
 const schema = z.object({
   guestName: z.string().min(1, "Guest name is required").optional(),
@@ -66,9 +67,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "This booking has been cancelled" }, { status: 409 });
   }
 
-  const checkInDate = data.checkInDate ? new Date(data.checkInDate) : booking.checkInDate;
+  const checkInDate = data.checkInDate ? parseHotelDateTime(data.checkInDate) : booking.checkInDate;
   const expectedCheckOut = data.expectedCheckOut
-    ? new Date(data.expectedCheckOut)
+    ? parseHotelDateTime(data.expectedCheckOut)
     : booking.expectedCheckOut;
 
   if (Number.isNaN(checkInDate.getTime()) || Number.isNaN(expectedCheckOut.getTime())) {

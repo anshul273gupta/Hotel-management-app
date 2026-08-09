@@ -7,6 +7,7 @@ import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
+import { parseHotelDateTime } from "@/lib/service-hours";
 
 const schema = z
   .object({
@@ -63,8 +64,8 @@ export async function POST(request: Request) {
   }
   const data = parsed.data;
 
-  const checkInDate = new Date(data.checkInDate);
-  const expectedCheckOut = new Date(data.expectedCheckOut);
+  const checkInDate = parseHotelDateTime(data.checkInDate);
+  const expectedCheckOut = parseHotelDateTime(data.expectedCheckOut);
   if (Number.isNaN(checkInDate.getTime()) || Number.isNaN(expectedCheckOut.getTime())) {
     return NextResponse.json({ error: { checkInDate: ["Invalid date"] } }, { status: 400 });
   }

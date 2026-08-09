@@ -54,3 +54,30 @@ export function nextHousekeepingWindow(now: Date = new Date()): string {
   const upcoming = HOUSEKEEPING_SHIFTS.find((shift) => minutes < shift.start * 60);
   return upcoming ? upcoming.label : HOUSEKEEPING_SHIFTS[0].label + " tomorrow";
 }
+
+/**
+ * Parses a `YYYY-MM-DDTHH:mm` value from a date/time input as hotel-local time.
+ *
+ * `new Date("2026-08-07T09:00")` resolves against the *server's* zone. On
+ * Vercel that is UTC, so a 9:00 AM check-out entered in Indore was stored as
+ * 9:00 UTC and read back as 2:30 PM — staff saw a time they never chose.
+ *
+ * Anchoring on the same wall-clock instant in UTC and measuring the zone's
+ * offset at that moment keeps the arithmetic correct across DST boundaries,
+ * even though India itself has none.
+ */
+export function parseHotelDateTime(value: string): Date {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+  if (!match) return new Date(value);
+
+  const [, y, mo, d, h = "0", mi = "0"] = match;
+  const asUtc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+
+  // How far the hotel's zone sits from UTC at that instant.
+  const probe = new Date(asUtc);
+  const local = new Date(probe.toLocaleString("en-US", { timeZone: HOTEL_TIMEZONE }));
+  const utc = new Date(probe.toLocaleString("en-US", { timeZone: "UTC" }));
+  const offsetMs = local.getTime() - utc.getTime();
+
+  return new Date(asUtc - offsetMs);
+}

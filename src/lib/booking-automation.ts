@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { syncRoomStatus } from "@/lib/rooms";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { toDecimalNumber } from "@/lib/format";
+import { HOTEL_TIMEZONE } from "@/lib/service-hours";
 
+/** How long before check-out staff are warned about an unpaid balance. */
 const PAYMENT_REMINDER_WINDOW_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -72,10 +74,35 @@ export async function processAutomaticBookingTransitions() {
 
     const outstanding = toDecimalNumber(booking.totalAmount) - toDecimalNumber(booking.amountPaid);
 
+    // Round to whole rupees and group in the Indian style, so the figure reads
+    // the way staff would say it out loud.
+    const amount = new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(outstanding);
+
+    const dueAt = new Intl.DateTimeFormat("en-IN", {
+      timeZone: HOTEL_TIMEZONE,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).format(booking.expectedCheckOut);
+
+    const minutesLeft = Math.round(
+      (booking.expectedCheckOut.getTime() - now.getTime()) / 60000,
+    );
+    const timing =
+      minutesLeft <= 0
+        ? "is due now"
+        : minutesLeft < 60
+          ? `is due in ${minutesLeft} minutes`
+          : `is due at ${dueAt}`;
+
     await createNotification({
       type: "PENDING_PAYMENT",
-      title: `Payment due for Room ${booking.room.number}`,
-      message: `${booking.guest.name}'s check-out is within 2 hours and ₹${outstanding.toFixed(2)} is still unpaid`,
+      title: `Collect ${amount} — Room ${booking.room.number}`,
+      message: `${booking.guest.name} still has ${amount} outstanding and their check-out ${timing}. Please settle the balance before they leave.`,
       link: "/rooms",
     });
 

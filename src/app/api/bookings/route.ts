@@ -8,6 +8,7 @@ import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
 import { readIdProofUpload } from "@/lib/id-proof";
+import { HOTEL_TIMEZONE, parseHotelDateTime } from "@/lib/service-hours";
 
 const schema = z
   .object({
@@ -67,13 +68,17 @@ export async function POST(request: Request) {
 
   let checkInDate = new Date();
   if (data.checkInTime) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    checkInDate = new Date(`${year}-${month}-${day}T${data.checkInTime}`);
+    // Both the date and the time must come from the hotel's zone: the server
+    // runs in UTC, where "today" and the wall clock differ from Indore.
+    const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: HOTEL_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    checkInDate = parseHotelDateTime(`${today}T${data.checkInTime}`);
   }
-  const expectedCheckOut = new Date(data.expectedCheckOut);
+  const expectedCheckOut = parseHotelDateTime(data.expectedCheckOut);
   if (expectedCheckOut <= checkInDate) {
     return NextResponse.json(
       { error: { expectedCheckOut: ["Check-out must be after check-in"] } },
