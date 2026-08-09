@@ -9,6 +9,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import { getDashboardSummary, getDashboardDetails } from "@/lib/dashboard";
+import { getSession } from "@/lib/session";
 import { KpiCard } from "@/components/dashboard/kpi-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,15 @@ import { formatCurrency, formatDate, formatDateTime, toDecimalNumber } from "@/l
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [summary, details] = await Promise.all([getDashboardSummary(), getDashboardDetails()]);
+  const [session, summary, details] = await Promise.all([
+    getSession(),
+    getDashboardSummary(),
+    getDashboardDetails(),
+  ]);
+
+  // Managers should not see the hotel's takings for the day. Owners and other
+  // staff keep the card exactly as before.
+  const canSeeRevenue = session?.role !== "MANAGER";
 
   return (
     <div className="space-y-6">
@@ -61,12 +70,14 @@ export default async function DashboardPage() {
           icon={Users}
           accent="default"
         />
-        <KpiCard
-          label="Revenue Today"
-          value={formatCurrency(summary.revenueToday)}
-          icon={Wallet}
-          accent="success"
-        />
+        {canSeeRevenue ? (
+          <KpiCard
+            label="Revenue Today"
+            value={formatCurrency(summary.revenueToday)}
+            icon={Wallet}
+            accent="success"
+          />
+        ) : null}
         <KpiCard
           label="Pending Payments"
           value={formatCurrency(summary.pendingPaymentsTotal)}
