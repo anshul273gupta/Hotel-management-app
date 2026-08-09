@@ -50,3 +50,7 @@ prisma/*.db-wal
 # Firebase service account — contains private key, never commit
 android/*firebase-adminsdk*.json
 firebase/service-account.json
+
+# Backups written by scripts/reset-guest-data.js — these contain guest ID
+# details and photos and must never be committed.
+backup-before-reset-*.json

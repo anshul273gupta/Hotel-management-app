@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "eslint",
     "db:seed": "tsx prisma/seed.ts",
-    "guests:dedupe": "node scripts/merge-duplicate-guests.js"
+    "guests:dedupe": "node scripts/merge-duplicate-guests.js",
+    "db:reset-guests": "node scripts/reset-guest-data.js"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
