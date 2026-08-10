@@ -14,7 +14,14 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { DARSHAN_ITINERARY } from "@/lib/darshan-itinerary";
+import {
+  DARSHAN_ITINERARY_BY_LANGUAGE,
+  ITINERARY_FOOTNOTE,
+  ITINERARY_LANGUAGES,
+  ITINERARY_TITLE,
+  type ItineraryLanguage,
+} from "@/lib/darshan-itinerary";
+import { cn } from "@/lib/utils";
 import {
   SERVICE_REQUEST_TYPE_LABELS,
   SERVICE_REQUEST_TYPE_ICONS,
@@ -85,6 +92,8 @@ export function ServiceRequestPage({
   const [selectedType, setSelectedType] = useState<ServiceRequestType | null>(null);
   const [showTempleInfo, setShowTempleInfo] = useState(false);
   const [showTaxiInfo, setShowTaxiInfo] = useState(false);
+  /** Language of the darshan itinerary only — the rest of the page is unchanged. */
+  const [itineraryLang, setItineraryLang] = useState<ItineraryLanguage>("en");
   const [wifiCopied, setWifiCopied] = useState(false);
   const [description, setDescription] = useState("");
 
@@ -507,10 +516,37 @@ export function ServiceRequestPage({
       <Dialog open={showTempleInfo} onOpenChange={setShowTempleInfo}>
         <DialogContent className="max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>🛕 Temple Darshan Information</DialogTitle>
+            <DialogTitle>🛕 {ITINERARY_TITLE[itineraryLang]}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {DARSHAN_ITINERARY.map((day) => (
+            {/*
+              Most pilgrims here read Hindi or Gujarati more comfortably than
+              English. Labels stay in their own script so a guest can find
+              their language without reading English first.
+            */}
+            <div className="flex gap-1.5 rounded-lg bg-muted/60 p-1">
+              {ITINERARY_LANGUAGES.map((lang) => {
+                const active = lang.code === itineraryLang;
+                return (
+                  <button
+                    key={lang.code}
+                    type="button"
+                    onClick={() => setItineraryLang(lang.code)}
+                    aria-pressed={active}
+                    className={cn(
+                      "flex-1 rounded-md px-2 py-1.5 text-sm font-medium transition-colors",
+                      active
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {lang.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {DARSHAN_ITINERARY_BY_LANGUAGE[itineraryLang].map((day) => (
               <div key={day.title} className="space-y-2">
                 <p className="text-sm font-semibold text-foreground">{day.title}</p>
                 {day.stops.map((stop) => (
@@ -521,9 +557,8 @@ export function ServiceRequestPage({
                 ))}
               </div>
             ))}
-            <p className="text-xs text-muted-foreground">
-              Timings are a suggestion and may vary. Please call reception if you would like help
-              arranging a taxi.
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {ITINERARY_FOOTNOTE[itineraryLang]}
             </p>
           </div>
           <DialogFooter>
