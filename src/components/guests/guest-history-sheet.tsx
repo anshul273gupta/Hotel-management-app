@@ -232,6 +232,7 @@ export function GuestHistorySheet({
                             expectedCheckOut: booking.expectedCheckOut,
                             notes: booking.notes,
                             roomNumber: booking.roomNumber,
+                            roomId: booking.roomId,
                             guest: {
                               name: guest.name,
                               mobile: guest.mobile,

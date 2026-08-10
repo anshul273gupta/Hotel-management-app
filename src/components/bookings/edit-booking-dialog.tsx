@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
@@ -18,6 +18,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { formatCurrency } from "@/lib/format";
+import { PAYMENT_METHOD_LABELS } from "@/lib/constants";
 
 export type EditableBooking = {
   id: string;
@@ -30,7 +31,18 @@ export type EditableBooking = {
   expectedCheckOut: string | Date;
   notes?: string | null;
   roomNumber: string;
+  /** Needed to preselect the room list; older callers may not pass it. */
+  roomId?: string;
   guest: { name: string; mobile: string | null; address?: string | null };
+};
+
+type RoomOption = {
+  id: string;
+  number: string;
+  type: string;
+  basePrice: number | string;
+  status: string;
+  maintenanceStatus: string;
 };
 
 /** `datetime-local` needs local wall-clock time, not the UTC ISO string. */
@@ -68,16 +80,69 @@ export function EditBookingDialog({
   const [checkIn, setCheckIn] = useState(toLocalInput(booking.checkInDate));
   const [checkOut, setCheckOut] = useState(toLocalInput(booking.expectedCheckOut));
   const [notes, setNotes] = useState(booking.notes ?? "");
+  const [roomId, setRoomId] = useState(booking.roomId ?? "");
+  const [rooms, setRooms] = useState<RoomOption[]>([]);
+  const [extraPayment, setExtraPayment] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("CASH");
+
+  /**
+   * Rooms are fetched when the dialog opens rather than with the page: the
+   * list is only needed if someone actually edits, and the guest history sheet
+   * can render many of these dialogs at once.
+   */
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch("/api/rooms")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.rooms) return;
+        setRooms(data.rooms as RoomOption[]);
+      })
+      .catch(() => {
+        // Non-fatal: without the list the room simply can't be changed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Check-in can only move while the guest hasn't arrived yet.
   const checkInLocked = booking.status !== "RESERVED";
   const canCancel = booking.status === "RESERVED" || booking.status === "CHECKED_IN";
 
   const newTotal = (Number(roomRate) || 0) * nights(checkIn, checkOut);
-  const refundDue = Math.max(0, booking.amountPaid - newTotal);
-  const stillDue = Math.max(0, newTotal - booking.amountPaid);
+  const extra = Math.max(0, Number(extraPayment) || 0);
+  const paidAfter = booking.amountPaid + extra;
+  const refundDue = Math.max(0, paidAfter - newTotal);
+  const stillDue = Math.max(0, newTotal - paidAfter);
+  /** What can still be collected — the cap on the extra-payment box. */
+  const outstanding = Math.max(0, newTotal - booking.amountPaid);
+  const overPaying = extra > 0 && extra > outstanding;
+
+  /**
+   * Rooms offered for a move: the current one, plus any that are free.
+   * Housekeeping state is deliberately not filtered out — staff move guests
+   * into a just-vacated room all the time and know better than the app.
+   */
+  const roomChoices = useMemo(() => {
+    return rooms.filter(
+      (r) =>
+        r.id === booking.roomId ||
+        (r.maintenanceStatus !== "UNDER_MAINTENANCE" && r.status !== "OCCUPIED"),
+    );
+  }, [rooms, booking.roomId]);
+
+  const selectedRoom = rooms.find((r) => r.id === roomId);
+  const roomMoved = Boolean(booking.roomId) && roomId !== booking.roomId;
 
   async function save() {
+    // Caught here as well as on the server so the guest isn't credited more
+    // than they owe by a stray extra digit.
+    if (overPaying) {
+      toast.error(`Only ${formatCurrency(outstanding)} is outstanding on this booking.`);
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`/api/bookings/${booking.id}`, {
@@ -89,6 +154,8 @@ export function EditBookingDialog({
           address,
           numberOfGuests,
           roomRate,
+          ...(roomMoved ? { roomId } : {}),
+          ...(extra > 0 ? { additionalPayment: extra, paymentMethod } : {}),
           ...(checkInLocked ? {} : { checkInDate: checkIn }),
           expectedCheckOut: checkOut,
           notes,
@@ -106,11 +173,15 @@ export function EditBookingDialog({
         toast.error(message);
         return;
       }
-      toast.success(
-        data.refundDue > 0
-          ? `Booking updated — ${formatCurrency(data.refundDue)} refund due to the guest`
-          : "Booking updated",
-      );
+      const parts: string[] = [];
+      if (data.movedFromRoom) {
+        parts.push(`moved from Room ${data.movedFromRoom} to Room ${data.booking?.roomNumber}`);
+      }
+      if (extra > 0) parts.push(`${formatCurrency(extra)} payment recorded`);
+      if (data.refundDue > 0) parts.push(`${formatCurrency(data.refundDue)} refund due to the guest`);
+      toast.success(parts.length ? `Booking updated — ${parts.join(", ")}` : "Booking updated");
+
+      setExtraPayment("");
       setOpen(false);
       router.refresh();
     } catch {
@@ -236,16 +307,111 @@ export function EditBookingDialog({
             />
           </div>
 
+          {/*
+            Guests get moved for maintenance, noise or an upgrade, and the
+            wrong room is sometimes picked at check-in. Works whether the stay
+            is still reserved or the guest has already arrived.
+          */}
+          {booking.roomId && roomChoices.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="eb-room">Room *</Label>
+              <select
+                id="eb-room"
+                value={roomId}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setRoomId(next);
+                  // Offer the new room's standard rate, but only when the
+                  // current rate hasn't been hand-adjusted away from it.
+                  const from = rooms.find((r) => r.id === booking.roomId);
+                  const to = rooms.find((r) => r.id === next);
+                  if (to && (!from || Number(roomRate) === Number(from.basePrice))) {
+                    setRoomRate(String(Number(to.basePrice)));
+                  }
+                }}
+                className="h-9 w-full rounded-lg border bg-background px-3 text-sm"
+              >
+                {roomChoices.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    Room {r.number} — {r.type}
+                    {r.id === booking.roomId ? " (current)" : ""}
+                  </option>
+                ))}
+              </select>
+              {roomMoved && selectedRoom && (
+                <p className="text-xs text-amber-700 dark:text-amber-400">
+                  Moving from Room {booking.roomNumber} to Room {selectedRoom.number}.
+                  {booking.status === "CHECKED_IN"
+                    ? " Room availability updates for both rooms on save."
+                    : ""}
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label htmlFor="eb-rate">Room Rate (per night) *</Label>
             <Input
               id="eb-rate"
               type="number"
-              min={1}
+              min={0}
               value={roomRate}
               onChange={(e) => setRoomRate(e.target.value)}
             />
           </div>
+
+          {/*
+            Adds to what has already been received rather than overwriting it,
+            so each amount collected stays in the payment history and lands in
+            revenue on the day it was actually taken.
+          */}
+          {outstanding > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="eb-extra">
+                Collect Payment{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional — {formatCurrency(outstanding)} outstanding)
+                </span>
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="eb-extra"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="0"
+                  value={extraPayment}
+                  onChange={(e) => setExtraPayment(e.target.value)}
+                  className="flex-1"
+                />
+                <select
+                  aria-label="Payment method"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className="h-9 rounded-lg border bg-background px-2 text-sm"
+                >
+                  {Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {overPaying ? (
+                <p className="text-xs text-destructive">
+                  That is more than the {formatCurrency(outstanding)} outstanding.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setExtraPayment(String(outstanding))}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  Collect full balance ({formatCurrency(outstanding)})
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="eb-notes">
@@ -265,6 +431,12 @@ export function EditBookingDialog({
               <span>Already paid</span>
               <span>{formatCurrency(booking.amountPaid)}</span>
             </div>
+            {extra > 0 && (
+              <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                <span>Collecting now</span>
+                <span>+{formatCurrency(extra)}</span>
+              </div>
+            )}
             {refundDue > 0 && (
               <p className="mt-1 font-medium text-amber-700 dark:text-amber-500">
                 Refund due to guest: {formatCurrency(refundDue)}

@@ -59,6 +59,7 @@ export async function getGuestsRegister() {
       bookings: guest.bookings.map((booking) => ({
         id: booking.id,
         roomNumber: booking.room.number,
+        roomId: booking.roomId,
         numberOfGuests: booking.numberOfGuests,
         roomRate: toDecimalNumber(booking.roomRate),
         notes: booking.notes,
