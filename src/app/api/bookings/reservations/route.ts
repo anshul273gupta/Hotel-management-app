@@ -7,7 +7,7 @@ import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
 import { ID_PROOF_PATTERNS, OWNER_SETTLE_NOTE, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
-import { parseHotelDateTime } from "@/lib/service-hours";
+import { parseHotelDateTime, nightsBetween } from "@/lib/service-hours";
 
 const schema = z
   .object({
@@ -92,10 +92,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const nights = Math.max(
-    1,
-    Math.ceil((expectedCheckOut.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24)),
-  );
+  const nights = nightsBetween(checkInDate, expectedCheckOut);
   const roomRate = data.ownerWillSettle ? 0 : data.roomRate;
   const totalAmount = roomRate * nights;
   const amountPaid = data.ownerWillSettle ? 0 : data.advanceAmount;

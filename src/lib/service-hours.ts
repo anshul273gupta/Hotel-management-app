@@ -81,3 +81,32 @@ export function parseHotelDateTime(value: string): Date {
 
   return new Date(asUtc - offsetMs);
 }
+
+/**
+ * Nights charged for a stay, counted as calendar nights in the hotel's own
+ * timezone.
+ *
+ * Previously this rounded up the elapsed time: Math.ceil(hours / 24). Checking
+ * in at 9:20am and leaving at 10:00am the next morning is 24.7 hours, which
+ * rounded up to 2 nights and billed the guest twice for a one-night stay. Any
+ * check-in later in the morning than the check-out time had the same problem.
+ *
+ * Hotels charge per date crossed, not per 24 hours, so the dates are compared
+ * instead — and in Asia/Kolkata, because the server runs in UTC where the
+ * date rolls over 5h30m late.
+ */
+export function nightsBetween(checkIn: Date, checkOut: Date): number {
+  const dateOnly = (d: Date) => {
+    const s = new Intl.DateTimeFormat("en-CA", {
+      timeZone: HOTEL_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+    return new Date(`${s}T00:00:00Z`).getTime();
+  };
+
+  const diffDays = Math.round((dateOnly(checkOut) - dateOnly(checkIn)) / 86_400_000);
+  // A same-day stay (day use) still counts as one night's charge.
+  return Math.max(1, diffDays);
+}

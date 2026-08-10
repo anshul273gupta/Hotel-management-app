@@ -38,6 +38,7 @@ import { ID_PROOF_PATTERNS, ID_PROOF_TYPES, PAYMENT_METHOD_LABELS, normalizeIdPr
 import { blockDigitKeys, blockNonDigitKeys } from "@/lib/input-guards";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
+import { allocatePaymentToRooms, roomStayTotals } from "@/lib/payment-split";
 import { whatsappTemplates } from "@/lib/whatsapp";
 import type { AvailableRoomForRange } from "@/lib/rooms";
 
@@ -122,17 +123,6 @@ function startOfToday() {
   return d;
 }
 
-/** Splits an amount across N parts (2 decimal places), giving any rounding remainder to the last part. */
-function splitAmount(total: number, parts: number): number[] {
-  if (parts <= 0) return [];
-  if (parts === 1) return [Math.round(total * 100) / 100];
-  const base = Math.floor((total / parts) * 100) / 100;
-  const shares = Array<number>(parts).fill(base);
-  const distributed = Math.round(base * (parts - 1) * 100) / 100;
-  shares[shares.length - 1] = Math.round((total - distributed) * 100) / 100;
-  return shares;
-}
-
 export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomForRange[] }) {
   const router = useRouter();
   const [checkInDate, setCheckInDate] = useState<Date>(() => startOfToday());
@@ -176,9 +166,16 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
   const idProofTypeValue = watch("idProofType");
   const idProofPattern = ID_PROOF_PATTERNS[idProofTypeValue as keyof typeof ID_PROOF_PATTERNS];
 
+  // Calendar nights, matching what the server bills. Rounding up elapsed time
+  // charged a second night whenever check-in was later in the day than
+  // check-out (e.g. in at 2pm, out at 10am next day = 20h, but 1 night).
   const nights = Math.max(
     1,
-    Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24)),
+    Math.round(
+      (new Date(toDateOnly(checkOutDate) + "T00:00:00").getTime() -
+        new Date(toDateOnly(checkInDate) + "T00:00:00").getTime()) /
+        (1000 * 60 * 60 * 24),
+    ),
   );
   const totalEstimate =
     watchedRooms.reduce((sum, r) => sum + (Number(r?.roomRate) || 0), 0) * nights;
@@ -272,6 +269,18 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
       return;
     }
 
+    // Taking more than the stay costs is almost always a typo, and the excess
+    // would otherwise be recorded as revenue the hotel has to give back.
+    if (values.ownerWillSettle !== true) {
+      const advance = Number(values.advanceAmount) || 0;
+      if (totalEstimate > 0 && advance > totalEstimate) {
+        toast.error(
+          `Advance ${formatCurrency(advance)} is more than the total ${formatCurrency(totalEstimate)}. Please check the amount.`,
+        );
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       // When the owner is settling up, nothing has been collected yet, so the
@@ -279,7 +288,13 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
       // fields happen to contain.
       const ownerSettles = values.ownerWillSettle === true;
       const totalAdvance = ownerSettles ? 0 : Number(values.advanceAmount) || 0;
-      const shares = splitAmount(totalAdvance, values.rooms.length);
+      // Credit each room what it actually owes rather than an equal share, so
+      // rooms at different rates don't end up one over- and one under-paid.
+      const stayTotals = roomStayTotals(
+        values.rooms.map((r) => (ownerSettles ? 0 : (r.roomRate as number | string | undefined))),
+        nights,
+      );
+      const shares = allocatePaymentToRooms(totalAdvance, stayTotals);
       const results: ReservationResult[] = [];
 
       for (let i = 0; i < values.rooms.length; i++) {

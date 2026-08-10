@@ -36,6 +36,7 @@ import { ID_PROOF_PATTERNS, ID_PROOF_TYPES, PAYMENT_METHOD_LABELS, normalizeIdPr
 import { blockDigitKeys, blockNonDigitKeys } from "@/lib/input-guards";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate, formatDateTime } from "@/lib/format";
+import { allocatePaymentToRooms, roomStayTotals } from "@/lib/payment-split";
 import { whatsappTemplates } from "@/lib/whatsapp";
 import type { AvailableRoom } from "@/lib/rooms";
 
@@ -142,17 +143,6 @@ function defaultCheckOut() {
   const d = new Date();
   d.setDate(d.getDate() + 1);
   return toLocalDateString(d);
-}
-
-/** Splits an amount across N parts (2 decimal places), giving any rounding remainder to the last part. */
-function splitAmount(total: number, parts: number): number[] {
-  if (parts <= 0) return [];
-  if (parts === 1) return [Math.round(total * 100) / 100];
-  const base = Math.floor((total / parts) * 100) / 100;
-  const shares = Array<number>(parts).fill(base);
-  const distributed = Math.round(base * (parts - 1) * 100) / 100;
-  shares[shares.length - 1] = Math.round((total - distributed) * 100) / 100;
-  return shares;
 }
 
 export function CheckInForm({
@@ -289,6 +279,18 @@ export function CheckInForm({
   }
 
   async function onSubmit(values: CheckInFormValues) {
+    // Taking more than the stay costs is almost always a typo, and the excess
+    // would otherwise be recorded as revenue the hotel has to give back.
+    if (values.ownerWillSettle !== true) {
+      const advance = Number(values.advanceAmount) || 0;
+      if (totalEstimate > 0 && advance > totalEstimate) {
+        toast.error(
+          `Advance ${formatCurrency(advance)} is more than the total ${formatCurrency(totalEstimate)}. Please check the amount.`,
+        );
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
       // When the owner is settling up, nothing has been collected yet, so the
@@ -296,7 +298,13 @@ export function CheckInForm({
       // fields happen to contain.
       const ownerSettles = values.ownerWillSettle === true;
       const totalAdvance = ownerSettles ? 0 : Number(values.advanceAmount) || 0;
-      const shares = splitAmount(totalAdvance, values.rooms.length);
+      // Credit each room what it actually owes rather than an equal share, so
+      // rooms at different rates don't end up one over- and one under-paid.
+      const stayTotals = roomStayTotals(
+        values.rooms.map((r) => (ownerSettles ? 0 : (r.roomRate as number | string | undefined))),
+        nights,
+      );
+      const shares = allocatePaymentToRooms(totalAdvance, stayTotals);
       const results: CheckInResult[] = [];
 
       for (let i = 0; i < values.rooms.length; i++) {
