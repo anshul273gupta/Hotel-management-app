@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { toast } from "sonner";
-import { Star, Loader2, Send, X } from "lucide-react";
+import { Star, Loader2, Phone, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,16 @@ import type { ServiceRequestType, ServiceRequestStatus } from "@/lib/types";
 const HIDDEN_TYPES: ServiceRequestType[] = ["CUSTOM"];
 const REQUEST_TYPES = (Object.keys(SERVICE_REQUEST_TYPE_LABELS) as ServiceRequestType[])
   .filter((t) => !HIDDEN_TYPES.includes(t));
+
+/**
+ * Number guests are asked to ring for taxis and transport.
+ *
+ * Deliberately separate from the reception number: taxi enquiries go to the
+ * owner's mobile, which is not always the number on the reception desk.
+ * NEXT_PUBLIC_ is required for the value to be readable in the browser.
+ */
+const TAXI_CONTACT_NUMBER =
+  process.env.NEXT_PUBLIC_TAXI_PHONE?.trim() || "9406851411";
 
 /** Builds a `tel:` link from a phone number, assuming 10-digit numbers are Indian (+91). */
 function buildTelLink(phone: string): string | null {
@@ -74,6 +84,7 @@ export function ServiceRequestPage({
 }) {
   const [selectedType, setSelectedType] = useState<ServiceRequestType | null>(null);
   const [showTempleInfo, setShowTempleInfo] = useState(false);
+  const [showTaxiInfo, setShowTaxiInfo] = useState(false);
   const [wifiCopied, setWifiCopied] = useState(false);
   const [description, setDescription] = useState("");
 
@@ -118,6 +129,9 @@ export function ServiceRequestPage({
     if (type === "CALL_RECEPTION") { callReception(); return; }
     // Darshan details are information, not something reception acts on.
     if (type === "TEMPLE_INFO") { setShowTempleInfo(true); return; }
+    // Taxis are arranged over the phone, so this shows the number to call
+    // rather than raising a request nobody would action.
+    if (type === "TAXI_BOOKING") { setShowTaxiInfo(true); return; }
     if (type === "TEA_COFFEE") {
       setTeaQty(0);
       setCoffeeQty(0);
@@ -514,6 +528,58 @@ export function ServiceRequestPage({
           </div>
           <DialogFooter>
             <Button className="w-full" onClick={() => setShowTempleInfo(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/*
+        Taxis are arranged by phone, so this replaces the "Send Request" flow
+        with the number to call. The number is a tel: link — on a phone it
+        dials, which saves the guest copying it out by hand.
+      */}
+      <Dialog open={showTaxiInfo} onOpenChange={setShowTaxiInfo}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>🚕 Taxi Booking Assistance</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm leading-relaxed text-foreground">
+              For taxi bookings or any information related to Omkareshwar transport or any
+              other transport, please feel free to contact us at the mobile number provided
+              below.
+            </p>
+
+            {(() => {
+              const telLink = buildTelLink(TAXI_CONTACT_NUMBER);
+              const numberText = (
+                <span className="font-mono text-xl font-semibold tracking-wider text-foreground">
+                  {TAXI_CONTACT_NUMBER}
+                </span>
+              );
+              return telLink ? (
+                <a
+                  href={telLink}
+                  className="flex items-center justify-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-3 transition-colors hover:bg-primary/10"
+                >
+                  <Phone className="h-4 w-4 shrink-0 text-primary" />
+                  {numberText}
+                </a>
+              ) : (
+                <div className="flex items-center justify-center rounded-lg border border-primary/20 bg-primary/5 px-3 py-3">
+                  {numberText}
+                </div>
+              );
+            })()}
+
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              ✨ We&apos;ll be happy to assist you and make your journey comfortable and
+              convenient.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button className="w-full" onClick={() => setShowTaxiInfo(false)}>
               Close
             </Button>
           </DialogFooter>
