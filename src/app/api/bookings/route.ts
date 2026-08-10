@@ -5,7 +5,7 @@ import { getSession, destroySession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
-import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
+import { ID_PROOF_PATTERNS, OWNER_SETTLE_NOTE, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
 import { readIdProofUploads } from "@/lib/id-proof";
 import { HOTEL_TIMEZONE, parseHotelDateTime } from "@/lib/service-hours";
@@ -29,12 +29,29 @@ const schema = z
     roomId: z.string().min(1, "Select a room"),
     checkInTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Enter a valid time").optional(),
     expectedCheckOut: z.string().min(1, "Select an expected check-out date"),
-    roomRate: z.coerce.number().positive("Enter the room rent"),
+    // May be 0 only when the owner is settling the payment separately.
+    roomRate: z.coerce.number().min(0, "Enter the room rent"),
     advanceAmount: z.coerce.number().min(0).default(0),
     paymentMethod: z.enum(["CASH", "CARD", "UPI", "BANK_TRANSFER", "OTHER"]).default("CASH"),
+    /**
+     * Sent by the "Payment will be done by owner" tick on the check-in form.
+     * Compared against the literal string: FormData sends "false" as text, and
+     * z.coerce.boolean() would read that as true — which would have quietly
+     * waived the rent check on every check-in.
+     */
+    ownerWillSettle: z
+      .union([z.boolean(), z.string()])
+      .optional()
+      .transform((v) => v === true || v === "true"),
     specialRequests: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    // Re-check on the server: the rent is only allowed to be missing when the
+    // owner is settling up. Without this, the browser check could be bypassed
+    // to create a free stay.
+    if (!data.ownerWillSettle && !(data.roomRate > 0)) {
+      ctx.addIssue({ code: "custom", path: ["roomRate"], message: "Enter the room rent" });
+    }
     if (data.idProofType && data.idProofNumber) {
       const pattern = ID_PROOF_PATTERNS[data.idProofType as keyof typeof ID_PROOF_PATTERNS];
       if (pattern && !pattern.regex.test(normalizeIdProofNumber(data.idProofNumber))) {
@@ -89,10 +106,19 @@ export async function POST(request: Request) {
     1,
     Math.ceil((expectedCheckOut.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24)),
   );
-  const roomRate = data.roomRate;
+  const roomRate = data.ownerWillSettle ? 0 : data.roomRate;
   const totalAmount = roomRate * nights;
-  const amountPaid = data.advanceAmount;
-  const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
+  const amountPaid = data.ownerWillSettle ? 0 : data.advanceAmount;
+  // A stay the owner will settle has no amount yet, so it must read as
+  // PENDING rather than PAID — otherwise a zero total would look settled and
+  // disappear from the pending-payments list.
+  const paymentStatus = data.ownerWillSettle
+    ? "PENDING"
+    : amountPaid <= 0
+      ? "PENDING"
+      : amountPaid >= totalAmount
+        ? "PAID"
+        : "PARTIAL";
 
   // Optional photo of the ID document, captured on the check-in form.
   let idProofs;
@@ -158,7 +184,9 @@ export async function POST(request: Request) {
           totalAmount,
           amountPaid,
           paymentStatus,
-          notes: data.specialRequests || undefined,
+          notes: data.ownerWillSettle
+            ? [OWNER_SETTLE_NOTE, data.specialRequests].filter(Boolean).join(" — ")
+            : data.specialRequests || undefined,
           createdById: session.userId,
           ...(amountPaid > 0
             ? {

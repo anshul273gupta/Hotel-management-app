@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -64,16 +65,37 @@ const reservationSchema = z
       .array(
         z.object({
           roomId: z.string().min(1),
-          roomRate: z.coerce.number().positive("Enter the room rent"),
+          // Allowed to be 0 or blank when the owner is settling the payment
+          // later — see the ownerWillSettle check below.
+          roomRate: z.coerce.number().min(0).optional().default(0),
         }),
       )
       .min(1, "Select at least one room")
       .max(MAX_ROOMS, `You can select up to ${MAX_ROOMS} rooms`),
     advanceAmount: z.coerce.number().min(0).default(0),
     paymentMethod: z.enum(["CASH", "CARD", "UPI", "BANK_TRANSFER", "OTHER"]).default("CASH"),
+    /**
+     * Ticked when the owner will handle the money themselves. The rent and
+     * advance stop being required so the booking can be taken immediately,
+     * and it is flagged so the amount can be filled in later.
+     */
+    ownerWillSettle: z.boolean().default(false),
     specialRequests: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    // Rent is still required for a normal booking; only the owner-settles
+    // tick makes it optional.
+    if (!data.ownerWillSettle) {
+      data.rooms.forEach((room, index) => {
+        if (!room.roomRate || Number(room.roomRate) <= 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["rooms", index, "roomRate"],
+            message: "Enter the room rent",
+          });
+        }
+      });
+    }
     if (data.idProofType && data.idProofNumber) {
       const pattern = ID_PROOF_PATTERNS[data.idProofType as keyof typeof ID_PROOF_PATTERNS];
       if (pattern && !pattern.regex.test(normalizeIdProofNumber(data.idProofNumber))) {
@@ -143,11 +165,13 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
       rooms: [],
       advanceAmount: 0,
       paymentMethod: "CASH",
+      ownerWillSettle: false,
     },
   });
 
   const { fields, append, remove, replace } = useFieldArray({ control, name: "rooms" });
   const watchedRooms = useWatch({ control, name: "rooms" }) ?? [];
+  const ownerWillSettle = useWatch({ control, name: "ownerWillSettle" }) === true;
 
   const idProofTypeValue = watch("idProofType");
   const idProofPattern = ID_PROOF_PATTERNS[idProofTypeValue as keyof typeof ID_PROOF_PATTERNS];
@@ -250,7 +274,11 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
 
     setSubmitting(true);
     try {
-      const totalAdvance = Number(values.advanceAmount) || 0;
+      // When the owner is settling up, nothing has been collected yet, so the
+      // rent and advance are stored as zero regardless of what the (disabled)
+      // fields happen to contain.
+      const ownerSettles = values.ownerWillSettle === true;
+      const totalAdvance = ownerSettles ? 0 : Number(values.advanceAmount) || 0;
       const shares = splitAmount(totalAdvance, values.rooms.length);
       const results: ReservationResult[] = [];
 
@@ -270,8 +298,9 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
             specialRequests: values.specialRequests,
             paymentMethod: values.paymentMethod,
             roomId: entry.roomId,
-            roomRate: entry.roomRate,
+            roomRate: ownerSettles ? 0 : entry.roomRate,
             advanceAmount: shares[i],
+            ownerWillSettle: ownerSettles,
             checkInDate: `${toDateOnly(checkInDate)}T${checkInTime}`,
             expectedCheckOut: `${toDateOnly(checkOutDate)}T${checkOutTime}`,
           }),
@@ -323,6 +352,7 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
       rooms: [],
       advanceAmount: 0,
       paymentMethod: "CASH",
+      ownerWillSettle: false,
       specialRequests: "",
     });
   }
@@ -574,9 +604,34 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
               {errors.rooms?.message && <p className="text-xs text-destructive">{errors.rooms.message}</p>}
             </div>
 
+            {/*
+              Lets reception take a booking when the owner is handling the
+              money separately, instead of inventing a rent to satisfy the
+              form. Saved with the amounts at zero and flagged as unsettled.
+            */}
+            <label
+              htmlFor="resOwnerWillSettle"
+              className="flex items-start gap-2.5 rounded-lg border border-dashed p-3 cursor-pointer hover:bg-muted/40"
+            >
+              <Checkbox
+                id="resOwnerWillSettle"
+                checked={ownerWillSettle}
+                onCheckedChange={(checked) => setValue("ownerWillSettle", checked === true)}
+                className="mt-0.5"
+              />
+              <span className="space-y-0.5">
+                <span className="block text-sm font-medium leading-none">
+                  Payment will be done by owner
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Complete the booking without entering rent or advance.
+                </span>
+              </span>
+            </label>
+
             {fields.length > 0 && (
               <div className="space-y-1.5">
-                <Label>Room Rent (per night) *</Label>
+                <Label>Room Rent (per night){ownerWillSettle ? "" : " *"}</Label>
                 <div className="space-y-2">
                   {fields.map((field, index) => {
                     const room = rooms.find((r) => r.id === field.roomId);
@@ -588,16 +643,18 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
                           min={0}
                           step="0.01"
                           className="flex-1"
+                          disabled={ownerWillSettle}
+                          placeholder={ownerWillSettle ? "Owner will settle" : undefined}
                           {...register(`rooms.${index}.roomRate`)}
                         />
                       </div>
                     );
                   })}
                 </div>
-                {errors.rooms?.find?.((r) => r?.roomRate) && (
+                {!ownerWillSettle && errors.rooms?.find?.((r) => r?.roomRate) && (
                   <p className="text-xs text-destructive">Enter a valid room rent for each room</p>
                 )}
-                {totalEstimate > 0 && (
+                {totalEstimate > 0 && !ownerWillSettle && (
                   <p className="text-xs text-muted-foreground">
                     {formatCurrency(totalEstimate)} estimated total ({nights} night{nights === 1 ? "" : "s"})
                   </p>
@@ -616,12 +673,20 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="resAdvanceAmount">Advance Payment</Label>
-                <Input id="resAdvanceAmount" type="number" min={0} step="0.01" {...register("advanceAmount")} />
+                <Input
+                  id="resAdvanceAmount"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  disabled={ownerWillSettle}
+                  placeholder={ownerWillSettle ? "Owner will settle" : undefined}
+                  {...register("advanceAmount")}
+                />
               </div>
 
               <div className="space-y-1.5">
                 <Label htmlFor="resPaymentMethod">Payment Method</Label>
-                <Select value={watch("paymentMethod")} onValueChange={(value) => setValue("paymentMethod", value as ReservationFormValues["paymentMethod"])}>
+                <Select value={watch("paymentMethod")} onValueChange={(value) => setValue("paymentMethod", value as ReservationFormValues["paymentMethod"])} disabled={ownerWillSettle}>
                   <SelectTrigger className="w-full" id="resPaymentMethod">
                     <SelectValue>
                       {(value: string) =>
@@ -640,7 +705,15 @@ export function ReservationForm({ initialRooms }: { initialRooms: AvailableRoomF
               </div>
             </div>
 
-            {totalEstimate > 0 && (() => {
+            {ownerWillSettle ? (
+              <div className="rounded-lg border border-dashed bg-muted/40 px-3 py-2">
+                <p className="text-sm font-medium">Payment will be done by owner</p>
+                <p className="text-xs text-muted-foreground">
+                  Saved with no amount. It will show under Pending Payments until the
+                  owner records it — use Edit Booking to add the rent later.
+                </p>
+              </div>
+            ) : totalEstimate > 0 && (() => {
               const advance = Number(watch("advanceAmount")) || 0;
               const due = totalEstimate - advance;
               return (

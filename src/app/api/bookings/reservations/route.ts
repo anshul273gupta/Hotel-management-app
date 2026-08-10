@@ -5,7 +5,7 @@ import { getSession, destroySession } from "@/lib/session";
 import { createNotification, broadcastUpdate } from "@/lib/notifications";
 import { syncRoomStatus } from "@/lib/rooms";
 import { toDecimalNumber } from "@/lib/format";
-import { ID_PROOF_PATTERNS, normalizeIdProofNumber } from "@/lib/constants";
+import { ID_PROOF_PATTERNS, OWNER_SETTLE_NOTE, normalizeIdProofNumber } from "@/lib/constants";
 import { findOrCreateGuest } from "@/lib/guest-matching";
 import { parseHotelDateTime } from "@/lib/service-hours";
 
@@ -28,12 +28,28 @@ const schema = z
     roomId: z.string().min(1, "Select a room"),
     checkInDate: z.string().min(1, "Select a check-in date"),
     expectedCheckOut: z.string().min(1, "Select a check-out date"),
-    roomRate: z.coerce.number().positive("Enter the room rent"),
+    // May be 0 only when the owner is settling the payment separately.
+    roomRate: z.coerce.number().min(0, "Enter the room rent"),
     advanceAmount: z.coerce.number().min(0).default(0),
+    /**
+     * Sent by the "Payment will be done by owner" tick on the booking form.
+     * Matched against the literal string because JSON may send either a real
+     * boolean or text, and coercion would read "false" as true.
+     */
+    ownerWillSettle: z
+      .union([z.boolean(), z.string()])
+      .optional()
+      .transform((v) => v === true || v === "true"),
     paymentMethod: z.enum(["CASH", "CARD", "UPI", "BANK_TRANSFER", "OTHER"]).default("CASH"),
     specialRequests: z.string().optional(),
   })
   .superRefine((data, ctx) => {
+    // Re-check on the server: the rent is only allowed to be missing when the
+    // owner is settling up, so the browser check cannot be bypassed to create
+    // a free booking.
+    if (!data.ownerWillSettle && !(data.roomRate > 0)) {
+      ctx.addIssue({ code: "custom", path: ["roomRate"], message: "Enter the room rent" });
+    }
     if (data.idProofType && data.idProofNumber) {
       const pattern = ID_PROOF_PATTERNS[data.idProofType as keyof typeof ID_PROOF_PATTERNS];
       if (pattern && !pattern.regex.test(normalizeIdProofNumber(data.idProofNumber))) {
@@ -80,10 +96,18 @@ export async function POST(request: Request) {
     1,
     Math.ceil((expectedCheckOut.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24)),
   );
-  const roomRate = data.roomRate;
+  const roomRate = data.ownerWillSettle ? 0 : data.roomRate;
   const totalAmount = roomRate * nights;
-  const amountPaid = data.advanceAmount;
-  const paymentStatus = amountPaid <= 0 ? "PENDING" : amountPaid >= totalAmount ? "PAID" : "PARTIAL";
+  const amountPaid = data.ownerWillSettle ? 0 : data.advanceAmount;
+  // A booking the owner will settle has no amount yet, so it must read as
+  // PENDING rather than PAID — otherwise a zero total would look settled.
+  const paymentStatus = data.ownerWillSettle
+    ? "PENDING"
+    : amountPaid <= 0
+      ? "PENDING"
+      : amountPaid >= totalAmount
+        ? "PAID"
+        : "PARTIAL";
 
   // Reuse the guest record when this is someone who has stayed before.
   const guest = await findOrCreateGuest({
@@ -126,7 +150,9 @@ export async function POST(request: Request) {
           totalAmount,
           amountPaid,
           paymentStatus,
-          notes: data.specialRequests || undefined,
+          notes: data.ownerWillSettle
+            ? [OWNER_SETTLE_NOTE, data.specialRequests].filter(Boolean).join(" — ")
+            : data.specialRequests || undefined,
           createdById: session.userId,
           ...(amountPaid > 0
             ? {

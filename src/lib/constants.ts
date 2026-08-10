@@ -57,6 +57,12 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   OTHER: "Other",
 };
 
+/**
+ * Written into a booking's notes when reception ticks "Payment will be done by
+ * owner", so the stay is identifiable later as one with no amount recorded yet.
+ */
+export const OWNER_SETTLE_NOTE = "Payment will be done by owner";
+
 export const ROOM_TYPE_LABELS: Record<string, string> = {
   DELUXE: "Deluxe",
   PREMIUM: "Premium",
