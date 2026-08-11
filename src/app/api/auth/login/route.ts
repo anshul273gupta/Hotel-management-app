@@ -37,12 +37,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
   }
 
-  await createSession({
-    userId: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role as Role,
-  });
+  await createSession(
+    {
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role as Role,
+    },
+    {
+      // Recorded so the owner can recognise the device in the devices list.
+      userAgent: request.headers.get("user-agent"),
+      ipAddress:
+        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+        request.headers.get("x-real-ip"),
+    },
+  );
 
   return NextResponse.json({
     user: { id: user.id, name: user.name, email: user.email, role: user.role },

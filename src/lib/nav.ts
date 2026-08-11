@@ -8,6 +8,7 @@ import {
   QrCode,
   TrendingUp,
   CalendarDays,
+  MonitorSmartphone,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,6 +30,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/guests", label: "Guests", icon: Users, roles: ["STAFF", "MANAGER", "OWNER"], mobile: true },
   { href: "/qr-codes", label: "QR Codes", icon: QrCode, roles: ["MANAGER", "OWNER"] },
   { href: "/owner", label: "Profit Dashboard", icon: TrendingUp, roles: ["OWNER"] },
+  { href: "/devices", label: "Signed-in Devices", icon: MonitorSmartphone, roles: ["OWNER"] },
 ];
 
 export function getNavForRole(role: Role): NavItem[] {

@@ -9,6 +9,14 @@ export type SessionPayload = {
   name: string;
   email: string;
   role: Role;
+  /**
+   * Row in user_sessions this token belongs to.
+   *
+   * Without it a signed token is valid until it expires and a lost phone
+   * cannot be signed out. Optional so tokens issued before this existed keep
+   * working until they lapse.
+   */
+  sessionId?: string;
 };
 
 function getSecretKey() {
@@ -35,6 +43,7 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
       name: payload.name as string,
       email: payload.email as string,
       role: payload.role as Role,
+      sessionId: typeof payload.sessionId === "string" ? payload.sessionId : undefined,
     };
   } catch {
     return null;

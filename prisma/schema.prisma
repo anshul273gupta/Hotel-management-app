@@ -24,12 +24,40 @@ model User {
   role         String   @default("STAFF")
   createdAt    DateTime @default(now())
 
+  sessions         UserSession[]
   bookingsCreated  Booking[]        @relation("BookingCreatedBy")
   assignedRequests ServiceRequest[] @relation("RequestAssignedTo")
   payments         Payment[]        @relation("PaymentRecordedBy")
   expenses         Expense[]        @relation("ExpenseCreatedBy")
 
   @@map("users")
+}
+
+/// One signed-in device.
+///
+/// The session cookie is a signed token that the server can verify without
+/// looking anything up, which is fast but means a token stays valid until it
+/// expires - there is no way to sign a lost phone out. Recording each sign-in
+/// gives every token an id that can be revoked, and doubles as the list of
+/// devices the owner sees.
+model UserSession {
+  id         String   @id @default(cuid())
+  userId     String
+  /// Best-effort device description from the browser's user-agent.
+  device     String?
+  /// Kept only to help the owner recognise a device; never shown publicly.
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  /// Set when signed out, by the user themselves or by the owner.
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
 }
 
 model Room {
